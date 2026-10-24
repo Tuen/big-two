@@ -6,9 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -17,23 +16,22 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout
+      - name: Checkout the published branch
         uses: actions/checkout@v4
+        with:
+          ref: gh-pages
 
-      - name: Assemble the site
+      - name: Assemble the playable files
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p _site
           rm -f probe-*.txt
           while IFS= read -r -d '' f; do
             out="${f%.b64}"
             mkdir -p "$(dirname "$out")"
             base64 -d "$f" > "$out"
+            rm -f "$f"
           done < <(find . -path ./.git -prune -o -name '*.b64' -print0)
           if ls main.dart.js.part* >/dev/null 2>&1; then
             cat $(ls main.dart.js.part* | sort) > main.dart.js
@@ -43,35 +41,18 @@ jobs:
             cat $(ls assets/NOTICES.part* | sort) > assets/NOTICES
             rm -f assets/NOTICES.part*
           fi
-          tar -cf - \
-            --exclude .git \
-            --exclude .github \
-            --exclude _site \
-            --exclude README.md \
-            --exclude '*.b64' \
-            . | tar -xf - -C _site
-          test -f _site/index.html
-          test -f _site/main.dart.js
-          test -f _site/favicon.png
-          test -s _site/favicon.png
+          test -s main.dart.js
+          test -s favicon.png
+          test -s assets/fonts/MaterialIcons-Regular.otf
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Assemble the playable site"
+          git push origin HEAD:gh-pages
 
-      - name: Enable GitHub Pages
+      - name: Request a Pages build
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api --method POST "repos/${{ github.repository }}/pages" --input - <<'EOF'
-          {"build_type":"workflow"}
-          EOF
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload the site
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
+          gh api --method POST "repos/${{ github.repository }}/pages/builds"
