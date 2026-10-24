@@ -80,24 +80,25 @@ test("flushes rank by suit, and only then by cards", () => {
   assert.equal(beats(combo(["3D", "4D", "5D", "6D", "8D"]), combo(["9C", "TC", "JC", "QC", "KC"])), false);
 });
 
-test("straights: wheel is lowest, 2 is high, equal tops use the top suit", () => {
-  const wheel = ["AD", "2C", "3H", "4S", "5D"];
+test("straights run from 3-4-5-6-7 to J-Q-K-A-2 and never wrap past the 2", () => {
   const low = ["3C", "4D", "5H", "6S", "7D"];
   const aceHigh = ["TC", "JH", "QD", "KS", "AD"];
   const twoHigh = ["JC", "QD", "KH", "AS", "2D"];
-  assert.equal(combo(wheel).kind, "straight");
-  assert.equal(combo(wheel).label.includes("A-2-3-4-5"), true);
-  assert.ok(beats(combo(low), combo(wheel)));
+  const twoHighSpade = ["JC", "QD", "KH", "AS", "2S"];
+  assert.equal(combo(low).kind, "straight");
+  assert.equal(key(low)[1], 2);
   assert.ok(beats(combo(aceHigh), combo(low)));
   assert.ok(beats(combo(twoHigh), combo(aceHigh)));
+  assert.ok(beats(combo(twoHighSpade), combo(twoHigh)));
   const sevenSpades = ["3D", "4C", "5H", "6D", "7S"];
   const sevenHearts = ["3C", "4D", "5C", "6C", "7H"];
   assert.ok(beats(combo(sevenSpades), combo(sevenHearts)));
-  assert.equal(identify(parseCards(["2D", "3C", "4H", "5S", "6D"]), false), null);
-  assert.equal(identify(parseCards(["QD", "KC", "AH", "2S", "3D"]), false), null);
-  assert.equal(identify(parseCards(["2D", "3C", "4H", "5S", "6D"]), true)?.kind, "straight");
-  assert.ok(key(["2D", "3C", "4H", "5S", "6D"], true)[1] < key(["3C", "4D", "5H", "6S", "7D"], true)[1]);
-  assert.ok(key(["QD", "KC", "AH", "2S", "3D"], true)[1] > key(["JC", "QD", "KH", "AS", "2D"], true)[1]);
+  for (const wrap of [false, true]) {
+    assert.equal(identify(parseCards(["AD", "2C", "3H", "4S", "5D"]), wrap), null);
+    assert.equal(identify(parseCards(["2D", "3C", "4H", "5S", "6D"]), wrap), null);
+    assert.equal(identify(parseCards(["QD", "KC", "AH", "2S", "3D"]), wrap), null);
+    assert.equal(identify(parseCards(["KD", "AC", "2H", "3S", "4D"]), wrap), null);
+  }
 });
 
 test("straight flushes rank by suit, then by the cards; royals are higher", () => {
@@ -111,14 +112,23 @@ test("straight flushes rank by suit, then by the cards; royals are higher", () =
   assert.equal(beats(combo(highHeart), combo(lowSpade)), false);
   assert.ok(beats(combo(highDiamond), combo(lowSpade)));
   const wheelFlush = ["AD", "2D", "3D", "4D", "5D"];
-  assert.equal(combo(wheelFlush).kind, "straight_flush");
-  assert.equal(combo(wheelFlush).bonusEach, 8);
+  assert.equal(combo(wheelFlush).kind, "flush");
+  assert.equal(combo(wheelFlush).bonusEach, 0);
+  const lowWrapFlush = ["2D", "3D", "4D", "5D", "6D"];
+  assert.equal(combo(lowWrapFlush).kind, "flush");
+  assert.equal(combo(lowWrapFlush).bonusEach, 0);
+  assert.equal(identify(parseCards(wheelFlush), true)?.kind, "flush");
+  assert.equal(identify(parseCards(lowWrapFlush), true)?.kind, "flush");
   const diamondRoyal = ["TD", "JD", "QD", "KD", "AD"];
   const spadeRoyal = ["TS", "JS", "QS", "KS", "AS"];
   assert.ok(beats(combo(spadeRoyal), combo(diamondRoyal)));
   const twoHighHearts = ["JH", "QH", "KH", "AH", "2H"];
+  const twoHighSpades = ["JS", "QS", "KS", "AS", "2S"];
   assert.equal(combo(twoHighHearts).kind, "straight_flush");
+  assert.equal(combo(twoHighSpades).kind, "straight_flush");
+  assert.ok(beats(combo(twoHighSpades), combo(twoHighHearts)));
   assert.ok(beats(combo(diamondRoyal), combo(twoHighHearts)));
+  assert.ok(beats(combo(diamondRoyal), combo(twoHighSpades)));
   const highSpade = ["9S", "TS", "JS", "QS", "KS"];
   const lowSpadeAgain = ["3S", "4S", "5S", "6S", "7S"];
   assert.ok(beats(combo(highSpade), combo(lowSpadeAgain)));
@@ -348,6 +358,8 @@ test("the worked example: straight flush, then the hand scores and the round end
   assert.deepEqual(body.runningTotals, [28, 60, 55, 49]);
   assert.equal(body.roundOver, true);
   assert.equal(body.roundWinner, "Justin");
+  assert.equal(body.hasBots, false);
+  assert.deepEqual(body.bots, []);
   assert.equal(roundWinnerName(["Justin", "Mary"], [12, 12], false), null);
   assert.equal(roundWinnerName(["Justin", "Mary"], [12, 12], true), "Justin, Mary");
 });

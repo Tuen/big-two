@@ -53,7 +53,6 @@ export function beats(attack: Combo, defense: Combo): boolean {
 interface StraightInfo {
   strength: number;
   top: Card;
-  wheel: boolean;
 }
 
 function countsByRank(cards: readonly Card[]): Map<number, Card[]> {
@@ -77,40 +76,22 @@ function cardWithRank(cards: readonly Card[], rank: number): Card {
 }
 
 /**
- * Straight strength, low to high, when wrap is off:
- * A-2-3-4-5 (wheel) is lowest, then 3-4-5-6-7 up to J-Q-K-A-2.
- * 2 is high except inside the wheel. A-2-3-4-5 is allowed even when wrap is off.
- * With wrap on, 2-3-4-5-6, Q-K-A-2-3 and K-A-2-3-4 are added, in that order,
- * above the wheel and (for the last two) above J-Q-K-A-2.
+ * Straights are five consecutive ranks from 3-4-5-6-7 (lowest) through J-Q-K-A-2 (highest).
+ * The 2 is always high. A straight never wraps past the 2, so A-2-3-4-5, 2-3-4-5-6,
+ * Q-K-A-2-3, and K-A-2-3-4 are not straights. `wrap` is kept so callers still compile;
+ * it cannot make those hands legal.
  */
 export function straightInfo(cards: readonly Card[], wrap: boolean): StraightInfo | null {
+  void wrap;
   if (cards.length !== 5) return null;
   const ranks = cards.map((card) => card.r);
   if (new Set(ranks).size !== 5) return null;
-  const has = (rank: number) => ranks.includes(rank);
-
-  if ([14, 15, 3, 4, 5].every(has)) {
-    return { strength: 0, top: cardWithRank(cards, 5), wheel: true };
-  }
 
   const sorted = [...ranks].sort((a, b) => a - b);
   const consecutive = sorted.every((rank, index) => index === 0 || rank === sorted[index - 1] + 1);
   if (consecutive && sorted[4] - sorted[0] === 4) {
     const topRank = sorted[4];
-    return { strength: topRank - 5, top: cardWithRank(cards, topRank), wheel: false };
-  }
-
-  if (!wrap) return null;
-
-  const wrapped: { ranks: number[]; strength: number; topRank: number }[] = [
-    { ranks: [15, 3, 4, 5, 6], strength: 1, topRank: 15 },
-    { ranks: [12, 13, 14, 15, 3], strength: 11, topRank: 15 },
-    { ranks: [13, 14, 15, 3, 4], strength: 12, topRank: 15 },
-  ];
-  for (const pattern of wrapped) {
-    if (pattern.ranks.every(has)) {
-      return { strength: pattern.strength, top: cardWithRank(cards, pattern.topRank), wheel: false };
-    }
+    return { strength: topRank - 5, top: cardWithRank(cards, topRank) };
   }
   return null;
 }
@@ -231,7 +212,7 @@ export function identify(cards: readonly Card[], wrap = false): Combo | null {
       kind: "straight",
       cards: owned,
       key: [1, straight.strength, SUIT_VALUE[straight.top.s]],
-      label: straight.wheel ? "Straight (A-2-3-4-5)" : "Straight",
+      label: "Straight",
       bonusEach: 0,
       bonusName: null,
     };

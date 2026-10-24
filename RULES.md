@@ -42,27 +42,22 @@ A flush is ranked by suit, and only by suit, until the suits match. A low spade 
 
 ## Straights
 
-Wrap is **off** unless the host turns it on before the round.
+A straight is five consecutive ranks. The 2 is high. The lowest straight is `3-4-5-6-7`. The highest is `J-Q-K-A-2`. Straights compare by the highest card, then by that card's suit, so two `J-Q-K-A-2` straights are ranked by the suit of the 2. `J-Q-K-A-2` beats `10-J-Q-K-A`.
 
-With wrap off, the cards have to be five consecutive ranks, and the 2 is high. `3-4-5-6-7` through `J-Q-K-A-2` are legal. `A-2-3-4-5` (the wheel) is legal and is the **lowest** straight, below `3-4-5-6-7`. The suit of the 5 breaks a tie between wheels. Every other straight uses the top rank, then the suit of that top card. `J-Q-K-A-2` beats `10-J-Q-K-A`.
+A straight never wraps past the 2. These are not straights, whether or not the table's wrap switch is on:
 
-`2-3-4-5-6`, `Q-K-A-2-3`, and `K-A-2-3-4` are not straights while wrap is off.
+- `A-2-3-4-5`
+- `2-3-4-5-6`
+- `Q-K-A-2-3`
+- `K-A-2-3-4`
 
-**Confirm.** With wrap on, those three are allowed, in this order, low to high:
-
-- `A-2-3-4-5` (strength 0, suit of the 5)
-- `2-3-4-5-6` (strength 1, suit of the 2)
-- `3-4-5-6-7` up through `J-Q-K-A-2` (the top rank decides)
-- `Q-K-A-2-3` (suit of the 2)
-- `K-A-2-3-4` (suit of the 2)
-
-An ace is low in the wheel and high in `10-J-Q-K-A`. A 2 is high in a normal straight.
+The wrap switch is still stored with the table. It cannot make any of those four hands legal. An ace is high in `10-J-Q-K-A`. A 2 is high in `J-Q-K-A-2`.
 
 ## Straight flushes and royals
 
 A royal flush is `10-J-Q-K-A` of one suit. It is its own category, above every straight flush. Royals are compared by suit only. The bonus is +10, not also +8. A diamond royal still beats a spade straight flush, because a royal is the higher category.
 
-`A-2-3-4-5` of one suit is a straight flush (+8), not a royal. `J-Q-K-A-2` of one suit is a straight flush, not a royal.
+`A-2-3-4-5` of one suit is a flush, not a straight flush. The bonus is 0. `2-3-4-5-6` of one suit is also a flush. `J-Q-K-A-2` of one suit is a straight flush (+8), not a royal. Two straight flushes of `J-Q-K-A-2` compare by the suit of the 2. A `J-Q-K-A-2` straight flush does not beat a royal.
 
 Straight flushes rank by suit. Any spade straight flush beats any heart one, any heart one beats any club one, and any club one beats any diamond one. When both straight flushes are the same suit, the higher cards win. A spade `3-4-5-6-7` beats a heart `9-10-J-Q-K`. A spade `9-10-J-Q-K` beats a spade `3-4-5-6-7`.
 

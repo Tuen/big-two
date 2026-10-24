@@ -55,39 +55,24 @@ bool beats(Combo attack, Combo defense) {
 class _StraightInfo {
   final int strength;
   final PlayingCard top;
-  final bool wheel;
-  const _StraightInfo(this.strength, this.top, this.wheel);
+  const _StraightInfo(this.strength, this.top);
 }
 
 PlayingCard _cardWithRank(List<PlayingCard> cards, int rank) => cards.firstWhere((card) => card.rank == rank);
 
 int _highestSuit(List<PlayingCard> cards) => cards.map((card) => suitValue[card.suit]!).reduce((a, b) => a > b ? a : b);
 
-/// Wheel A-2-3-4-5 is the lowest straight. 2 is high otherwise, so J-Q-K-A-2 is the highest
-/// natural straight. Wrap adds 2-3-4-5-6, then Q-K-A-2-3, then K-A-2-3-4 above that.
-_StraightInfo? _straightInfo(List<PlayingCard> cards, bool wrap) {
+/// Five consecutive ranks from 3-4-5-6-7 through J-Q-K-A-2. The 2 is high.
+/// A straight never wraps past the 2. The ignored argument cannot make
+/// A-2-3-4-5, 2-3-4-5-6, Q-K-A-2-3, or K-A-2-3-4 legal.
+_StraightInfo? _straightInfo(List<PlayingCard> cards, bool _) {
   if (cards.length != 5) return null;
   final ranks = cards.map((card) => card.rank).toList();
   if (ranks.toSet().length != 5) return null;
-  bool has(int rank) => ranks.contains(rank);
-  if ([14, 15, 3, 4, 5].every(has)) {
-    return _StraightInfo(0, _cardWithRank(cards, 5), true);
-  }
   final sorted = [...ranks]..sort();
   final consecutive = List.generate(5, (index) => index == 0 || sorted[index] == sorted[index - 1] + 1).every((ok) => ok);
   if (consecutive && sorted[4] - sorted[0] == 4) {
-    return _StraightInfo(sorted[4] - 5, _cardWithRank(cards, sorted[4]), false);
-  }
-  if (!wrap) return null;
-  const wrapped = [
-    [15, 3, 4, 5, 6, 1],
-    [12, 13, 14, 15, 3, 11],
-    [13, 14, 15, 3, 4, 12],
-  ];
-  for (final pattern in wrapped) {
-    if (pattern.take(5).every(has)) {
-      return _StraightInfo(pattern[5], _cardWithRank(cards, 15), false);
-    }
+    return _StraightInfo(sorted[4] - 5, _cardWithRank(cards, sorted[4]));
   }
   return null;
 }
@@ -211,7 +196,7 @@ Combo? identify(List<PlayingCard> cards, {bool wrap = false}) {
       kind: ComboKind.straight,
       cards: owned,
       key: [1, straight.strength, suitValue[straight.top.suit]!],
-      label: straight.wheel ? "Straight (A-2-3-4-5)" : "Straight",
+      label: "Straight",
       bonusEach: 0,
       bonusName: null,
     );

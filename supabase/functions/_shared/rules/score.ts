@@ -81,6 +81,10 @@ export interface WebhookPayload {
   runningTotals: number[];
   roundOver: boolean;
   roundWinner: string | null;
+  /** True when this hand was played with at least one computer player. */
+  hasBots: boolean;
+  /** Display names of the computer players, without an emoji. */
+  bots: string[];
 }
 
 /** Lowest total, in seat order. A tie lists every name. Null until the round is over. */
@@ -105,6 +109,8 @@ export function webhookPayload(args: {
   runningTotals: number[];
   roundOver: boolean;
   bonuses: readonly Bonus[];
+  hasBots?: boolean;
+  bots?: readonly string[];
 }): WebhookPayload {
   return {
     handId: args.handId,
@@ -124,5 +130,7 @@ export function webhookPayload(args: {
     runningTotals: [...args.runningTotals],
     roundOver: args.roundOver,
     roundWinner: roundWinnerName(args.players, args.runningTotals, args.roundOver),
+    hasBots: args.hasBots ?? false,
+    bots: [...(args.bots ?? [])],
   };
 }

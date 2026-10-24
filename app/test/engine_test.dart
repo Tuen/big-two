@@ -65,14 +65,18 @@ void main() {
     );
   });
 
-  test("straights, the wheel, and wrap", () {
-    expect(beats(mustCombo(["3C", "4D", "5H", "6S", "7D"]), mustCombo(["AD", "2C", "3H", "4S", "5D"])), isTrue);
+  test("straights run from 3-4-5-6-7 to J-Q-K-A-2 and never wrap past the 2", () {
+    expect(mustCombo(["3C", "4D", "5H", "6S", "7D"]).kind, ComboKind.straight);
+    expect(mustCombo(["3C", "4D", "5H", "6S", "7D"]).key[1], 2);
     expect(beats(mustCombo(["JC", "QD", "KH", "AS", "2D"]), mustCombo(["TC", "JH", "QD", "KS", "AD"])), isTrue);
-    expect(mustCombo(["AD", "2C", "3H", "4S", "5D"]).label.contains("A-2-3-4-5"), isTrue);
+    expect(beats(mustCombo(["JC", "QD", "KH", "AS", "2S"]), mustCombo(["JC", "QD", "KH", "AS", "2D"])), isTrue);
     expect(beats(mustCombo(["3D", "4C", "5H", "6D", "7S"]), mustCombo(["3C", "4D", "5C", "6C", "7H"])), isTrue);
-    expect(identify(parseCards(["2D", "3C", "4H", "5S", "6D"])), isNull);
-    expect(identify(parseCards(["2D", "3C", "4H", "5S", "6D"]), wrap: true)?.kind, ComboKind.straight);
-    expect(identify(parseCards(["QD", "KC", "AH", "2S", "3D"])), isNull);
+    for (final wrap in [false, true]) {
+      expect(identify(parseCards(["AD", "2C", "3H", "4S", "5D"]), wrap: wrap), isNull);
+      expect(identify(parseCards(["2D", "3C", "4H", "5S", "6D"]), wrap: wrap), isNull);
+      expect(identify(parseCards(["QD", "KC", "AH", "2S", "3D"]), wrap: wrap), isNull);
+      expect(identify(parseCards(["KD", "AC", "2H", "3S", "4D"]), wrap: wrap), isNull);
+    }
   });
 
   test("straight flushes rank by suit, then by the cards, and royals are higher", () {
@@ -82,11 +86,17 @@ void main() {
       beats(mustCombo(["TD", "JD", "QD", "KD", "AD"]), mustCombo(["3S", "4S", "5S", "6S", "7S"])),
       isTrue,
     );
-    expect(mustCombo(["AD", "2D", "3D", "4D", "5D"]).kind, ComboKind.straightFlush);
-    expect(mustCombo(["AD", "2D", "3D", "4D", "5D"]).bonusEach, 8);
+    expect(mustCombo(["AD", "2D", "3D", "4D", "5D"]).kind, ComboKind.flush);
+    expect(mustCombo(["AD", "2D", "3D", "4D", "5D"]).bonusEach, 0);
+    expect(mustCombo(["2D", "3D", "4D", "5D", "6D"]).kind, ComboKind.flush);
+    expect(mustCombo(["2D", "3D", "4D", "5D", "6D"]).bonusEach, 0);
+    expect(identify(parseCards(["AD", "2D", "3D", "4D", "5D"]), wrap: true)?.kind, ComboKind.flush);
     expect(beats(mustCombo(["TS", "JS", "QS", "KS", "AS"]), mustCombo(["TD", "JD", "QD", "KD", "AD"])), isTrue);
     expect(mustCombo(["JH", "QH", "KH", "AH", "2H"]).kind, ComboKind.straightFlush);
+    expect(mustCombo(["JS", "QS", "KS", "AS", "2S"]).kind, ComboKind.straightFlush);
+    expect(beats(mustCombo(["JS", "QS", "KS", "AS", "2S"]), mustCombo(["JH", "QH", "KH", "AH", "2H"])), isTrue);
     expect(beats(mustCombo(["TD", "JD", "QD", "KD", "AD"]), mustCombo(["JH", "QH", "KH", "AH", "2H"])), isTrue);
+    expect(beats(mustCombo(["TD", "JD", "QD", "KD", "AD"]), mustCombo(["JS", "QS", "KS", "AS", "2S"])), isTrue);
     expect(beats(mustCombo(["9S", "TS", "JS", "QS", "KS"]), mustCombo(["3S", "4S", "5S", "6S", "7S"])), isTrue);
     expect(beats(mustCombo(["9S", "TS", "JS", "QS", "KS"]), mustCombo(["9H", "TH", "JH", "QH", "KH"])), isTrue);
   });
@@ -236,6 +246,8 @@ void main() {
     );
     expect(body.tableCode, "ABC123");
     expect(body.roundWinner, "Justin");
+    expect(body.hasBots, isFalse);
+    expect(body.bots, isEmpty);
     expect(roundWinnerName(["Justin", "Mary"], [12, 12], false), isNull);
     expect(roundWinnerName(["Justin", "Mary"], [12, 12], true), "Justin, Mary");
     expect(body.bonuses, [
