@@ -1,17 +1,20 @@
 import "dart:async";
 
+import "package:big_two/online/action_reel.dart";
 import "package:big_two/online/game_api.dart";
 import "package:big_two/online/snapshot.dart";
 import "package:big_two/rules/cards.dart";
 import "package:big_two/rules/combo.dart";
 import "package:big_two/rules/commit.dart";
 import "package:big_two/rules/game.dart";
+import "package:big_two/sound/table_sounds.dart";
 import "package:big_two/theme.dart";
 import "package:big_two/widgets/score_sheet.dart";
 import "package:big_two/widgets/table_view.dart";
 import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
+import "package:shared_preferences/shared_preferences.dart";
 import "package:supabase_flutter/supabase_flutter.dart";
 
 const _timezones = [
@@ -51,11 +54,25 @@ class _OnlinePageState extends State<OnlinePage> {
   List<String> _order = [];
   Timer? _poll;
   Timer? _clock;
+  Timer? _pace;
   RealtimeChannel? _channel;
+  final ActionReel _reel = ActionReel();
+  final Map<int, DateTime> _passUntil = {};
+  bool _dwelling = false;
+  int? _actor;
+  int _playToken = 0;
+  int _dealToken = 0;
+  String _trickOrigin = "";
+  late bool _sound;
+  String? _dealCue;
+  String? _turnCue;
+  String? _endCue;
 
   @override
   void initState() {
     super.initState();
+    _sound = widget.sound;
+    TableSounds.instance.enabled = _sound;
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _view?.settings.turnTimerSeconds != 0) setState(() {});
     });
@@ -66,6 +83,7 @@ class _OnlinePageState extends State<OnlinePage> {
   void dispose() {
     _poll?.cancel();
     _clock?.cancel();
+    _pace?.cancel();
     _channel?.unsubscribe();
     super.dispose();
   }
@@ -121,13 +139,14 @@ class _OnlinePageState extends State<OnlinePage> {
   }
 
   Future<void> _send(String function, Map<String, dynamic> body) async {
-    setState(() => _error = null);
+    setState(() {
+      _error = null;
+      _flushQueue();
+    });
+    TableSounds.instance.unlock();
     try {
       final next = await widget.api.call(function, body);
-      if (widget.sound) {
-        SystemSound.play(SystemSoundType.click);
-        HapticFeedback.mediumImpact();
-      }
+      if (_sound) HapticFeedback.mediumImpact();
       if (mounted) setState(() => _accept(next));
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -146,6 +165,150 @@ class _OnlinePageState extends State<OnlinePage> {
       final ids = next.yourCards.toSet();
       _order = [..._order.where(ids.contains), ...next.yourCards.where((id) => !_order.contains(id))];
     }
+    _syncReel(previous, next);
+  }
+
+  void _syncReel(TableSnapshot? previous, TableSnapshot next) {
+    final live = next.status == "playing" || next.status == "hand_end" || next.status == "round_end";
+    if (!live || next.hand == 0) {
+      _pace?.cancel();
+      _pace = null;
+      _dwelling = false;
+      _actor = null;
+      _reel.reset();
+      return;
+    }
+    final freshHand = _reel.handKey != "${next.tableId}:${next.round}:${next.hand}";
+    _reel.ingest("${next.tableId}:${next.round}:${next.hand}", next.recent);
+    if (freshHand) {
+      _align(next);
+      _dwelling = false;
+      _actor = null;
+      _pace?.cancel();
+      _pace = null;
+      _cueDeal(previous, next);
+      _cueEnd(next);
+      return;
+    }
+    if (_reel.queue.isNotEmpty && !_dwelling && _pace == null) {
+      _present();
+      return;
+    }
+    if (_reel.queue.isEmpty && !_dwelling) {
+      _align(next);
+      _cueTurn(next);
+      _cueEnd(next);
+    }
+  }
+
+  void _present() {
+    final action = _reel.pop();
+    final view = _view;
+    if (action == null || view == null) {
+      _settle();
+      return;
+    }
+    _dwelling = true;
+    _actor = action.seat;
+    if (action.kind == "pass") {
+      _passUntil[action.seat] = DateTime.now().add(const Duration(milliseconds: 1500));
+      TableSounds.instance.pass();
+      Timer(const Duration(milliseconds: 1500), () {
+        if (mounted) setState(() {});
+      });
+    } else {
+      _playToken += 1;
+      _trickOrigin = seatOrigin(action.seat, view.you);
+      TableSounds.instance.playCard();
+    }
+    _pace?.cancel();
+    _pace = Timer(const Duration(milliseconds: 1000), () {
+      if (!mounted) return;
+      setState(() {
+        _dwelling = false;
+        _pace = null;
+        if (_reel.queue.isEmpty) {
+          _settle();
+        } else {
+          _present();
+        }
+      });
+    });
+  }
+
+  void _settle() {
+    _dwelling = false;
+    _actor = null;
+    _pace?.cancel();
+    _pace = null;
+    final view = _view;
+    if (view == null) return;
+    _align(view);
+    _cueTurn(view);
+    _cueEnd(view);
+  }
+
+  void _flushQueue() {
+    _pace?.cancel();
+    _pace = null;
+    _reel.flush();
+    _dwelling = false;
+    _actor = null;
+    final view = _view;
+    if (view != null) _align(view);
+  }
+
+  void _align(TableSnapshot view) {
+    final trick = view.trick;
+    if (trick == null) {
+      _reel.align();
+    } else {
+      _reel.align(seat: trick.seat, cards: trick.cards, label: trick.label);
+    }
+  }
+
+  void _cueDeal(TableSnapshot? previous, TableSnapshot next) {
+    if (next.status != "playing") return;
+    final token = "${next.round}:${next.hand}";
+    if (_dealCue == token) return;
+    final started = previous != null && (previous.status != "playing" || previous.round != next.round || previous.hand != next.hand);
+    if (!started) return;
+    _dealCue = token;
+    _dealToken += 1;
+    TableSounds.instance.deal();
+  }
+
+  void _cueTurn(TableSnapshot next) {
+    if (_dwelling || _reel.queue.isNotEmpty) return;
+    if (next.status != "playing" || next.turn != next.you) return;
+    final token = "${next.round}:${next.hand}:${next.turn}:${next.turnStartedAt}";
+    if (_turnCue == token) return;
+    _turnCue = token;
+    TableSounds.instance.yourTurn();
+  }
+
+  void _cueEnd(TableSnapshot next) {
+    if (_dwelling || _reel.queue.isNotEmpty) return;
+    if (next.status != "hand_end" && next.status != "round_end") return;
+    final token = "${next.round}:${next.hand}";
+    if (_endCue == token) return;
+    _endCue = token;
+    TableSounds.instance.handOver(roundOver: next.roundOver || next.status == "round_end");
+  }
+
+  Future<void> _toggleSound() async {
+    final next = !_sound;
+    setState(() {
+      _sound = next;
+      TableSounds.instance.enabled = next;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool("sound", next);
+  }
+
+  bool _passing(int seat) {
+    final until = _passUntil[seat];
+    return until != null && until.isAfter(DateTime.now());
   }
 
   Map<String, dynamic> _settingsJson(Settings settings) => {
@@ -181,7 +344,7 @@ class _OnlinePageState extends State<OnlinePage> {
         body: Center(child: _error == null ? const CircularProgressIndicator() : _errorBox()),
       );
     }
-    if (view.status == "playing") return _table(view);
+    if (view.status == "playing" || _catchingUp(view)) return _table(view);
     if (view.status == "hand_end" || view.status == "round_end") return _summary(view);
     return _lobby(view);
   }
@@ -466,6 +629,11 @@ class _OnlinePageState extends State<OnlinePage> {
     }
   }
 
+  bool _catchingUp(TableSnapshot view) {
+    if (view.status != "hand_end" && view.status != "round_end") return false;
+    return _dwelling || _reel.queue.isNotEmpty;
+  }
+
   Widget _table(TableSnapshot view) {
     final local = _local(view);
     final mine = view.turn == view.you;
@@ -477,24 +645,46 @@ class _OnlinePageState extends State<OnlinePage> {
     final stuck = mine && local != null && leading && legalSelections(local, view.you, view.settings).isEmpty;
     final waiting = mine ? view.message : "Waiting for ${view.seats[view.turn ?? view.you].name ?? "the next player"}";
     final left = _remaining(view);
+    final shownTurn = _dwelling && _actor != null ? _actor : view.turn;
+    final counts = countsHolding(view.counts, _reel.queue);
+    final trick = _reel.trick;
+    final previous = _reel.previous;
+    final trickName = trick == null ? null : view.seats[trick.seat].name;
+    final previousName = previous == null ? null : view.seats[previous.seat].name;
     return Scaffold(
       body: TableView(
-        bottom: _spot(view, view.you),
-        left: _spot(view, (view.you + 1) % 4),
-        top: _spot(view, (view.you + 2) % 4),
-        right: _spot(view, (view.you + 3) % 4),
+        bottom: _spot(view, view.you, turn: shownTurn == view.you, cards: counts[view.you]),
+        left: _spot(view, (view.you + 1) % 4, turn: shownTurn == (view.you + 1) % 4, cards: counts[(view.you + 1) % 4]),
+        top: _spot(view, (view.you + 2) % 4, turn: shownTurn == (view.you + 2) % 4, cards: counts[(view.you + 2) % 4]),
+        right: _spot(view, (view.you + 3) % 4, turn: shownTurn == (view.you + 3) % 4, cards: counts[(view.you + 3) % 4]),
         hand: [for (final id in _order) parseCard(id)],
         selected: _selected,
-        trick: (view.trick?.cards ?? const []).map(parseCard).toList(),
-        trickLabel: view.trick?.label,
-        trickPlayer: view.trick == null ? null : view.seats[view.trick!.seat].name,
+        trick: (trick?.cards ?? const []).map(parseCard).toList(),
+        trickLabel: trick?.label,
+        trickPlayer: trickName,
+        previousCards: (previous?.cards ?? const []).map(parseCard).toList(),
+        previousLabel: previous?.label,
+        previousPlayer: previousName,
+        previousIsLastTrick: previous?.lastTrick ?? false,
+        yourTurn: view.status == "playing" && view.turn == view.you,
+        playToken: _playToken,
+        trickOrigin: _trickOrigin,
+        dealToken: _dealToken,
+        soundOn: _sound,
+        onToggleSound: _toggleSound,
         canPlay: mine && issue == null,
         canPass: mine && (!leading || stuck),
         passLabel: stuck ? "Pass lead" : "Pass",
         reason: _error ?? (issue == null || selected.isEmpty ? null : issue),
         banner: left == null ? waiting : "$waiting  ·  ${left}s",
-        onPlay: () => _send("play", {"tableId": view.tableId, "cards": selected}),
-        onPass: () => _send("pass", {"tableId": view.tableId}),
+        onPlay: () {
+          setState(_flushQueue);
+          _send("play", {"tableId": view.tableId, "cards": selected});
+        },
+        onPass: () {
+          setState(_flushQueue);
+          _send("pass", {"tableId": view.tableId});
+        },
         onSortRank: () => setState(() => _order = sortCards(parseCards(view.yourCards), "rank").map(formatCard).toList()),
         onSortSuit: () => setState(() => _order = sortCards(parseCards(view.yourCards), "suit").map(formatCard).toList()),
         onScores: () => _scores(view),
@@ -519,13 +709,14 @@ class _OnlinePageState extends State<OnlinePage> {
     return left < 0 ? 0 : left;
   }
 
-  SeatSpot _spot(TableSnapshot view, int seat) {
+  SeatSpot _spot(TableSnapshot view, int seat, {required bool turn, required int cards}) {
     return SeatSpot(
       name: view.seats[seat].name == null ? "Empty" : _seatTitle(view.seats[seat]),
-      cardsLeft: view.counts[seat],
+      cardsLeft: cards,
       total: view.running[seat],
-      turn: view.turn == seat,
+      turn: turn,
       connected: view.seats[seat].connected,
+      passing: _passing(seat),
     );
   }
 
@@ -543,7 +734,7 @@ class _OnlinePageState extends State<OnlinePage> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          Text(winner, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800)),
+          WinnerPulse(text: winner),
           const SizedBox(height: 12),
           if (result != null)
             for (var seat = 0; seat < 4; seat++)

@@ -67,7 +67,7 @@ class _HomePageState extends State<HomePage> {
         settings: defaultSettings,
         sound: _sound,
       ),
-    ));
+    )).then((_) => _reloadSound());
   }
 
   void _online({required bool create}) {
@@ -99,7 +99,12 @@ class _HomePageState extends State<HomePage> {
         code: _code.text.trim().toUpperCase(),
         sound: _sound,
       ),
-    ));
+    )).then((_) => _reloadSound());
+  }
+
+  void _reloadSound() {
+    final stored = widget.prefs.getBool("sound") ?? true;
+    if (mounted && stored != _sound) setState(() => _sound = stored);
   }
 
   void _needName() {

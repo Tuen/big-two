@@ -24,6 +24,21 @@ class TrickInfo {
   const TrickInfo({required this.seat, required this.cards, required this.label});
 }
 
+class RecentAction {
+  final int seq;
+  final int seat;
+  final String kind;
+  final List<String> cards;
+  final String label;
+  const RecentAction({
+    required this.seq,
+    required this.seat,
+    required this.kind,
+    required this.cards,
+    required this.label,
+  });
+}
+
 class HandResultView {
   final List<int> cardsLeft;
   final List<int> handPoints;
@@ -104,6 +119,7 @@ class TableSnapshot {
   final bool canNewRound;
   final bool canEditSettings;
   final String? turnStartedAt;
+  final List<RecentAction> recent;
 
   const TableSnapshot({
     required this.tableId,
@@ -133,6 +149,7 @@ class TableSnapshot {
     required this.canNewRound,
     required this.canEditSettings,
     required this.turnStartedAt,
+    this.recent = const [],
   });
 
   factory TableSnapshot.fromJson(Map<String, dynamic> json) {
@@ -218,6 +235,16 @@ class TableSnapshot {
       canNewRound: json["canNewRound"] == true,
       canEditSettings: json["canEditSettings"] == true,
       turnStartedAt: json["turnStartedAt"]?.toString(),
+      recent: [
+        for (final row in (json["recent"] as List? ?? const []))
+          RecentAction(
+            seq: _int(_map(row)["seq"]),
+            seat: _int(_map(row)["seat"]),
+            kind: _map(row)["kind"]?.toString() == "play" ? "play" : "pass",
+            cards: [for (final card in (_map(row)["cards"] as List? ?? const [])) card.toString()],
+            label: _map(row)["label"]?.toString() ?? "",
+          ),
+      ],
     );
   }
 }

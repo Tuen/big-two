@@ -1,14 +1,19 @@
 import "dart:async";
 import "dart:math";
 
+import "package:big_two/online/action_reel.dart";
+import "package:big_two/online/snapshot.dart";
 import "package:big_two/rules/cards.dart";
+import "package:big_two/rules/combo.dart";
 import "package:big_two/rules/commit.dart";
 import "package:big_two/rules/game.dart";
+import "package:big_two/sound/table_sounds.dart";
 import "package:big_two/theme.dart";
 import "package:big_two/widgets/score_sheet.dart";
 import "package:big_two/widgets/table_view.dart";
 import "package:flutter/material.dart" hide Step;
 import "package:flutter/services.dart";
+import "package:shared_preferences/shared_preferences.dart";
 
 class PracticePage extends StatefulWidget {
   final List<String> names;
@@ -39,6 +44,14 @@ class _PracticePageState extends State<PracticePage> {
   Timer? _ticker;
   int? _secondsLeft;
   late final List<TextEditingController> _nameControllers;
+  late bool _sound;
+  final List<RecentAction> _acts = [];
+  final Map<int, DateTime> _passUntil = {};
+  int _seq = 0;
+  int _playToken = 0;
+  int _dealToken = 0;
+  String _trickOrigin = "";
+  bool _fanned = false;
 
   @override
   void initState() {
@@ -47,6 +60,8 @@ class _PracticePageState extends State<PracticePage> {
     _names = [...widget.names];
     _round = _settings.firstRoundNumber;
     _nameControllers = [for (final name in _names) TextEditingController(text: name)];
+    _sound = widget.sound;
+    TableSounds.instance.enabled = _sound;
   }
 
   @override
@@ -81,17 +96,35 @@ class _PracticePageState extends State<PracticePage> {
       _reason = null;
       _cover = true;
       _secondsLeft = null;
+      _acts.clear();
+      _passUntil.clear();
+      _fanned = false;
+      _seq = 0;
     });
     _ticker?.cancel();
+    TableSounds.instance.unlock();
+    TableSounds.instance.deal();
   }
 
   void _reveal() {
     _ticker?.cancel();
     final seconds = _settings.turnTimerSeconds;
+    final state = _state;
     setState(() {
       _cover = false;
       _secondsLeft = seconds == 0 ? null : seconds;
+      if (!_fanned) {
+        _fanned = true;
+        _dealToken += 1;
+      }
+      if (state != null && state.trickSeat != null && state.trickCards.isNotEmpty) {
+        _playToken += 1;
+        _trickOrigin = seatOrigin(state.trickSeat!, state.turn);
+      }
+      _armPasses();
     });
+    TableSounds.instance.unlock();
+    TableSounds.instance.yourTurn();
     if (seconds == 0 || _state == null) return;
     final started = DateTime.now();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -99,7 +132,7 @@ class _PracticePageState extends State<PracticePage> {
       final left = seconds - DateTime.now().difference(started).inSeconds;
       if (left <= 0) {
         _ticker?.cancel();
-        _apply(applyTimeout(_state!, _settings));
+        _applyTimeout();
       } else {
         setState(() => _secondsLeft = left);
       }
@@ -118,12 +151,10 @@ class _PracticePageState extends State<PracticePage> {
       final bonus = ok.state.bonuses.last;
       banner = "${_names[bonus.seat]} played a ${bonus.combo}. +${bonus.pointsEach} to everyone else.";
     }
-    if (widget.sound) {
-      SystemSound.play(SystemSoundType.click);
-      HapticFeedback.mediumImpact();
-    }
+    if (_sound) HapticFeedback.mediumImpact();
     _ticker?.cancel();
     if (ok.state.status == "complete" && ok.result != null) {
+      TableSounds.instance.handOver(roundOver: ok.result!.roundOver);
       final result = ok.result!;
       final date = _today();
       final bonuses = result.bonuses.map((bonus) => "${_names[bonus.seat]} ${bonus.combo} +${bonus.pointsEach}").join("; ");
@@ -159,6 +190,100 @@ class _PracticePageState extends State<PracticePage> {
       _order = sortCards(ok.state.hands[ok.state.turn], "rank").map(formatCard).toList();
       _secondsLeft = null;
     });
+  }
+
+  void _applyTimeout() {
+    final before = _state;
+    if (before == null) return;
+    final step = applyTimeout(before, _settings);
+    if (step is StepOk) {
+      final seat = before.turn;
+      final played = step.state.hands[seat].length < before.hands[seat].length;
+      if (played) {
+        final cards = [...step.state.trickCards];
+        _remember(seat, "play", cards, _comboLabel(cards));
+        TableSounds.instance.playCard();
+      } else {
+        _remember(seat, "pass", const [], "Pass");
+        TableSounds.instance.pass();
+      }
+    }
+    _apply(step);
+  }
+
+  void _playSelected() {
+    final state = _state;
+    if (state == null) return;
+    final cards = _selected.toList();
+    final step = applyPlay(state, state.turn, cards, _settings);
+    if (step is StepOk) {
+      _remember(state.turn, "play", cards, _comboLabel(cards));
+      TableSounds.instance.unlock();
+      TableSounds.instance.playCard();
+    }
+    _apply(step);
+  }
+
+  void _passTurn() {
+    final state = _state;
+    if (state == null) return;
+    final step = applyPass(state, state.turn, _settings);
+    if (step is StepOk) {
+      _remember(state.turn, "pass", const [], "Pass");
+      TableSounds.instance.unlock();
+      TableSounds.instance.pass();
+    }
+    _apply(step);
+  }
+
+  void _remember(int seat, String kind, List<String> cards, String label) {
+    _acts.add(RecentAction(seq: ++_seq, seat: seat, kind: kind, cards: cards, label: label));
+  }
+
+  String _comboLabel(List<String> cards) {
+    final combo = identify(parseCards(cards), wrap: _settings.straightsWrap);
+    return combo?.label ?? "Play";
+  }
+
+  void _armPasses() {
+    final until = DateTime.now().add(const Duration(milliseconds: 1500));
+    for (var i = _acts.length - 1; i >= 0; i--) {
+      if (_acts[i].kind == "play") break;
+      _passUntil[_acts[i].seat] = until;
+    }
+    if (_passUntil.isEmpty) return;
+    Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  bool _passing(int seat) {
+    final until = _passUntil[seat];
+    return until != null && until.isAfter(DateTime.now());
+  }
+
+  (ShownPlay?, ShownPlay?) _piles(HandState state) {
+    final plays = _acts.where((act) => act.kind == "play").toList();
+    if (plays.isEmpty) return (null, null);
+    if (state.trick == null) {
+      final last = plays.last;
+      return (null, ShownPlay(seat: last.seat, cards: last.cards, label: last.label, lastTrick: true));
+    }
+    final last = plays.last;
+    final current = ShownPlay(seat: last.seat, cards: last.cards, label: last.label, lastTrick: false);
+    if (plays.length < 2) return (current, null);
+    final earlier = plays[plays.length - 2];
+    return (current, ShownPlay(seat: earlier.seat, cards: earlier.cards, label: earlier.label, lastTrick: false));
+  }
+
+  Future<void> _toggleSound() async {
+    final next = !_sound;
+    setState(() {
+      _sound = next;
+      TableSounds.instance.enabled = next;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool("sound", next);
   }
 
   String _today() {
@@ -352,6 +477,9 @@ class _PracticePageState extends State<PracticePage> {
     final leading = state.trick == null;
     final stuck = leading && legalSelections(state, seat, _settings).isEmpty;
     final timer = _secondsLeft == null ? "" : "  ·  ${_secondsLeft}s";
+    final piles = _piles(state);
+    final current = piles.$1;
+    final previous = piles.$2;
     return Scaffold(
       body: TableView(
         bottom: _spot(seat, state),
@@ -360,16 +488,26 @@ class _PracticePageState extends State<PracticePage> {
         right: _spot((seat + 3) % 4, state),
         hand: [for (final id in _order) parseCard(id)],
         selected: _selected,
-        trick: state.trickCards.map(parseCard).toList(),
-        trickLabel: state.trick?.label,
-        trickPlayer: state.trickSeat == null ? null : _names[state.trickSeat!],
+        trick: (current?.cards ?? state.trickCards).map(parseCard).toList(),
+        trickLabel: current?.label ?? state.trick?.label,
+        trickPlayer: state.trickSeat == null ? null : _names[current?.seat ?? state.trickSeat!],
+        previousCards: (previous?.cards ?? const <String>[]).map(parseCard).toList(),
+        previousLabel: previous?.label,
+        previousPlayer: previous == null ? null : _names[previous.seat],
+        previousIsLastTrick: previous?.lastTrick ?? false,
+        yourTurn: true,
+        playToken: _playToken,
+        trickOrigin: _trickOrigin,
+        dealToken: _dealToken,
+        soundOn: _sound,
+        onToggleSound: _toggleSound,
         canPlay: issue == null,
         canPass: !leading || stuck,
         passLabel: stuck ? "Pass lead" : "Pass",
         reason: _reason ?? (issue == null || _selected.isEmpty ? null : issue),
         banner: "$_banner$timer",
-        onPlay: () => _apply(applyPlay(state, seat, _selected.toList(), _settings)),
-        onPass: () => _apply(applyPass(state, seat, _settings)),
+        onPlay: _playSelected,
+        onPass: _passTurn,
         onSortRank: () => _sort("rank"),
         onSortSuit: () => _sort("suit"),
         onScores: _scores,
@@ -388,6 +526,7 @@ class _PracticePageState extends State<PracticePage> {
       cardsLeft: state.hands[seat].length,
       total: state.running[seat],
       turn: state.turn == seat,
+      passing: _passing(seat),
     );
   }
 
@@ -401,7 +540,7 @@ class _PracticePageState extends State<PracticePage> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          Text(winner, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800)),
+          WinnerPulse(text: winner),
           const SizedBox(height: 8),
           Text(_banner, style: const TextStyle(fontSize: 18)),
           const SizedBox(height: 16),
