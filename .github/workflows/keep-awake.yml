@@ -1,0 +1,13 @@
+name: Keep the table awake
+
+on:
+  schedule:
+    - cron: "0 18 * * 0,3"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        run: curl -fsS "https://ascorkeijzrpmfykpcrb.supabase.co/functions/v1/ping"
