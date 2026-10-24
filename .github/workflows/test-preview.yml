@@ -1,0 +1,116 @@
+name: Publish the test preview
+
+on:
+  push:
+    branches: [v1.1-dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Share the pages lock so this cannot push gh-pages while the live publish is writing it.
+# This workflow does not cancel an in-progress live publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out v1.1-dev
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'v1.1-dev' || github.sha }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.7"
+          channel: stable
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test the TypeScript rules
+        working-directory: rules
+        run: node --experimental-strip-types --test --test-concurrency=1 test/rules.test.ts test/bots.test.ts test/recent.test.ts
+
+      - name: Test the Flutter app
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter test
+
+      - name: Decode web icons
+        working-directory: app
+        run: |
+          python3 - <<'PY'
+          import base64, pathlib
+          found = list(pathlib.Path("web").rglob("*.png.b64"))
+          if not found:
+              raise SystemExit("no web icons to decode")
+          for src in found:
+              dest = src.with_suffix("")
+              dest.write_bytes(base64.b64decode(src.read_text().strip()))
+              src.unlink()
+              print(dest.as_posix(), dest.stat().st_size)
+          PY
+
+      - name: Build the test preview
+        working-directory: app
+        run: flutter build web --release --base-href /big-two/test/ --dart-define-from-file=public-client.json --dart-define=TEST_PREVIEW=true
+
+      - name: Mark the page as a test build
+        working-directory: app
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          page = pathlib.Path("build/web/index.html")
+          text = page.read_text()
+          text = text.replace("<title>Big Two</title>", "<title>Big Two (TEST VERSION)</title>", 1)
+          text = text.replace('content="Big Two"', 'content="Big Two test"', 1)
+          page.write_text(text)
+          manifest = pathlib.Path("build/web/manifest.json")
+          raw = manifest.read_text()
+          raw = raw.replace('"name": "Big Two"', '"name": "Big Two (test)"', 1)
+          raw = raw.replace('"short_name": "Big Two"', '"short_name": "Big Two test"', 1)
+          manifest.write_text(raw)
+          PY
+
+      - name: Check out gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+          fetch-depth: 0
+
+      - name: Replace only the test folder
+        run: |
+          rm -rf site/test
+          mkdir -p site/test
+          cp -a app/build/web/. site/test/
+          rm -rf site/test/canvaskit
+          touch site/.nojekyll
+          if [ -e site/index.html ] && grep -q "TEST VERSION" site/index.html; then
+            echo "The live page was overwritten."
+            exit 1
+          fi
+
+      - name: Publish the test folder
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Test preview is already current"
+          else
+            git commit -m "Publish the test preview"
+            git fetch origin gh-pages
+            git rebase origin/gh-pages
+            git push origin HEAD:gh-pages
+          fi

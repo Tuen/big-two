@@ -185,6 +185,56 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+/// True only for the GitHub Pages test preview (`--dart-define=TEST_PREVIEW=true`).
+const kTestPreview = bool.fromEnvironment("TEST_PREVIEW");
+
+class TestVersionBanner extends StatelessWidget {
+  const TestVersionBanner({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Material(
+      color: Color(0xFFB71C1C),
+      child: SizedBox(
+        width: double.infinity,
+        height: 28,
+        child: Center(
+          child: Text(
+            "TEST VERSION",
+            style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.4),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Floats the test banner over the app so it does not shrink the table.
+class TestPreviewOverlay extends StatelessWidget {
+  final bool show;
+  final Widget child;
+  const TestPreviewOverlay({super.key, required this.show, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!show) return child;
+    return Stack(
+      children: [
+        child,
+        const Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: SafeArea(
+            bottom: false,
+            child: IgnorePointer(child: TestVersionBanner()),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class BigTwoApp extends StatefulWidget {
   final SharedPreferences prefs;
   final SupabaseClient? supabase;
@@ -207,15 +257,16 @@ class _BigTwoAppState extends State<BigTwoApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: "Big Two",
+      title: kTestPreview ? "Big Two (test)" : "Big Two",
       theme: bigTwoTheme(),
       debugShowCheckedModeBanner: false,
       builder: (context, child) {
         final system = MediaQuery.textScalerOf(context).scale(16) / 16;
-        return MediaQuery(
+        final scaled = MediaQuery(
           data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(system * _scale)),
           child: child ?? const SizedBox.shrink(),
         );
+        return TestPreviewOverlay(show: kTestPreview, child: scaled);
       },
       home: HomePage(
         prefs: widget.prefs,
