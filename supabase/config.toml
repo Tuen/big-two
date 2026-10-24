@@ -1,0 +1,25 @@
+project_id = "big-two"
+
+[auth]
+enable_anonymous_sign_ins = true
+
+[functions.deal]
+verify_jwt = true
+
+[functions.play]
+verify_jwt = true
+
+[functions.pass]
+verify_jwt = true
+
+[functions.tick]
+verify_jwt = true
+
+[functions.table]
+verify_jwt = true
+
+[functions.ping]
+verify_jwt = false
+
+[functions.home]
+verify_jwt = false

@@ -1,0 +1,8 @@
+{
+  "name": "big-two-rules",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.ts"
+  }
+}
