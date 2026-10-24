@@ -119,13 +119,15 @@ Any seated player can deal, deal the next hand, or start a new round. Only the h
 Settings, with the defaults:
 
 - Passing does not lock you for the rest of the trick.
-- Straights do not wrap.
+- Straights run from 3-4-5-6-7 up to J-Q-K-A-2. They never wrap past the 2. The wrap switch is stored, and it cannot make A-2-3-4-5 or 2-3-4-5-6 legal.
 - Turn timer off. The choices are off, 15, 30, 45, and 60 seconds.
 - Season 24. The host can change it in the lobby.
 - The round number starts at 1 and goes up when a round ends. The host can set the first round number before any hand exists.
 - Score dates use `Australia/Melbourne`. The host can pick Sydney, Brisbane, Adelaide, Perth, Auckland, or UTC.
 
 In the lobby the host can shuffle seats, move a player up or down, and rename a seated player. A name is at most 24 characters.
+
+The host can also fill an empty seat with a computer player: Easy, Normal, or Hard. Normal is the default. The seat is named Bot Ruby, Bot Jade, Bot Pearl, or Bot Amber, and the table shows a robot badge. One to three humans can play with the rest filled by bots, including one human and three bots. Bots are seated players on the server. They use the same rules, see only their own cards, the cards played so far, and the other players' counts, and they take about a second to move. A later tick finishes a bot turn if the previous request stopped. A hand with any bot is still scored normally. The scoreboard says **Practice (computer players)**. Play on this device does not add bots and does not POST the webhook.
 
 ## Score webhook
 
@@ -147,7 +149,7 @@ Leave the URL unset until the receiver exists. Do not put the URL or the key in 
 
 An older secret name, `SCORE_WEBHOOK_SECRET`, still works when `SCORE_WEBHOOK_KEY` is unset. In that case the header defaults to `X-Score-Secret` unless `SCORE_WEBHOOK_KEY_HEADER` is set.
 
-The function tries up to 5 times, waiting 400 ms, 800 ms, 1.6 s, and 3.2 s between tries. Each try is a row in `webhook_log` (status code and a short detail, not the response body). After 5 failures the hand is `failed`. A later `tick` retries while the status is `pending`, `failed`, or `sending`, and stops once 5 attempts are recorded. `handId` does not change, so the receiver can ignore a duplicate.
+The first attempt bursts up to 5 tries, waiting 400 ms, 800 ms, 1.6 s, and 3.2 s between them. Each try is a row in `webhook_log` (status code and a short detail, not the response body). A later `tick` that finds the hand `failed` makes one more try, up to 15 tries in total. A hand already marked `sending` is left alone unless that claim is older than 60 seconds. `handId` does not change, so the receiver can ignore a duplicate.
 
 The score sheet and the hand-over screen show **Scores sent ✓**, **Scores failed**, **Scores not sent**, or **Sending scores**.
 
@@ -165,11 +167,13 @@ The score sheet and the hand-over screen show **Scores sent ✓**, **Scores fail
   "bonuses": [{ "player": "Damien", "combo": "straight flush", "pointsEach": 8 }],
   "runningTotals": [28, 60, 55, 49],
   "roundOver": true,
-  "roundWinner": "Justin"
+  "roundWinner": "Justin",
+  "hasBots": false,
+  "bots": []
 }
 ```
 
-`date` is the calendar date in the table's timezone. `handPoints` is card points plus bonuses that player was given during the hand. In the example, cards left of 0, 11, 9, and 4 are worth 0, 22, 9, and 4. Damien's straight flush added 8 to the other three, which is why their hand points are 8, 30, 17, and 4. `roundWinner` is null until the round is over. If two players share the lowest total, the names are joined in seat order, such as `"Justin, Mary"`.
+`date` is the calendar date in the table's timezone. `handPoints` is card points plus bonuses that player was given during the hand. In the example, cards left of 0, 11, 9, and 4 are worth 0, 22, 9, and 4. Damien's straight flush added 8 to the other three, which is why their hand points are 8, 30, 17, and 4. `roundWinner` is null until the round is over. If two players share the lowest total, the names are joined in seat order, such as `"Justin, Mary"`. `hasBots` is true when the hand included a computer player, and `bots` lists those display names. An all-human hand sends false and an empty list.
 
 **Scores → Export round as CSV** still copies a sheet you can paste into Excel. The snackbar says "Round CSV copied. Paste it into Excel."
 

@@ -280,7 +280,8 @@ class _PracticePageState extends State<PracticePage> {
           ),
           SwitchListTile(
             value: _settings.straightsWrap,
-            title: const Text("Straights can wrap"),
+            title: const Text("Straight wrap"),
+            subtitle: const Text("Saved for this game. A straight still cannot pass the 2."),
             onChanged: (value) => setState(() => _settings = _settings.copyWith(straightsWrap: value)),
           ),
           const Text("Turn timer", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),

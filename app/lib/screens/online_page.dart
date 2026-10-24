@@ -227,7 +227,7 @@ class _OnlinePageState extends State<OnlinePage> {
           ] else
             const Padding(
               padding: EdgeInsets.only(top: 8),
-              child: Text("The host can shuffle or move players before the deal."),
+              child: Text("The host can add a computer player, shuffle seats, or rename players before the deal."),
             ),
           if (host && view.canEditSettings) ...[
             SwitchListTile(
@@ -237,7 +237,8 @@ class _OnlinePageState extends State<OnlinePage> {
             ),
             SwitchListTile(
               value: view.settings.straightsWrap,
-              title: const Text("Straights can wrap"),
+              title: const Text("Straight wrap"),
+              subtitle: const Text("Saved with the table. A straight still cannot pass the 2."),
               onChanged: (value) => _saveSettings(view, view.settings.copyWith(straightsWrap: value)),
             ),
             const Text("Turn timer", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
@@ -309,12 +310,26 @@ class _OnlinePageState extends State<OnlinePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(seat.name ?? "Empty seat", style: const TextStyle(fontSize: 22)),
+                Text(seat.name == null ? "Empty seat" : _seatTitle(seat), style: const TextStyle(fontSize: 22)),
+                if (seat.isBot)
+                  Text("Computer · ${_difficultyLabel(seat.difficulty)}", style: const TextStyle(fontSize: 14)),
                 if (index == 0) const Text("Leads the first hand", style: TextStyle(fontSize: 14)),
               ],
             ),
           ),
           Icon(seat.connected ? Icons.circle : Icons.circle_outlined, color: seat.name == null ? Colors.white24 : gold, size: 16),
+          if (host && seat.userId == null)
+            IconButton(
+              tooltip: "Add computer player",
+              onPressed: () => _addBot(view, index),
+              icon: const Icon(Icons.smart_toy_outlined),
+            ),
+          if (host && seat.isBot)
+            IconButton(
+              tooltip: "Remove computer player",
+              onPressed: () => _send("table", {"action": "remove_bot", "tableId": view.tableId, "seat": index}),
+              icon: const Icon(Icons.person_remove),
+            ),
           if (host) ...[
             IconButton(
               tooltip: "Rename",
@@ -335,6 +350,64 @@ class _OnlinePageState extends State<OnlinePage> {
         ],
       ),
     );
+  }
+
+  String _seatTitle(SeatInfo seat) {
+    final name = seat.name ?? "Empty";
+    return seat.isBot ? "$name 🤖" : name;
+  }
+
+  String _difficultyLabel(String? difficulty) {
+    switch (difficulty) {
+      case "easy":
+        return "Easy";
+      case "hard":
+        return "Hard";
+      default:
+        return "Normal";
+    }
+  }
+
+  Future<void> _addBot(TableSnapshot view, int index) async {
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        var difficulty = "normal";
+        return StatefulBuilder(
+          builder: (context, setLocal) => AlertDialog(
+            title: Text("Seat ${index + 1}"),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text("Add computer player"),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final item in const [("easy", "Easy"), ("normal", "Normal"), ("hard", "Hard")])
+                      ChoiceChip(
+                        label: Text(item.$2),
+                        selected: difficulty == item.$1,
+                        onSelected: (_) => setLocal(() => difficulty = item.$1),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, difficulty),
+                child: const Text("Add computer player"),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (chosen == null || !mounted) return;
+    await _send("table", {"action": "add_bot", "tableId": view.tableId, "seat": index, "difficulty": chosen});
   }
 
   Future<void> _renameSeat(TableSnapshot view, int index) async {
@@ -448,7 +521,7 @@ class _OnlinePageState extends State<OnlinePage> {
 
   SeatSpot _spot(TableSnapshot view, int seat) {
     return SeatSpot(
-      name: view.seats[seat].name ?? "Empty",
+      name: view.seats[seat].name == null ? "Empty" : _seatTitle(view.seats[seat]),
       cardsLeft: view.counts[seat],
       total: view.running[seat],
       turn: view.turn == seat,
@@ -458,7 +531,7 @@ class _OnlinePageState extends State<OnlinePage> {
 
   Widget _summary(TableSnapshot view) {
     final result = view.result;
-    final names = [for (final seat in view.seats) seat.name ?? "Empty"];
+    final names = [for (final seat in view.seats) seat.name == null ? "Empty" : _seatTitle(seat)];
     final winner = result?.winner == null ? "Nobody went out" : "${names[result!.winner!]} wins the hand";
     final matches = view.deckReveal == null || view.commitment == null
         ? null
@@ -498,8 +571,9 @@ class _OnlinePageState extends State<OnlinePage> {
   }
 
   Future<void> _scores(TableSnapshot view) {
-    final names = [for (final seat in view.seats) seat.name ?? "Empty"];
+    final names = [for (final seat in view.seats) seat.name == null ? "Empty" : _seatTitle(seat)];
     final matches = view.deckReveal != null && view.commitment != null && commitDeck(parseCards(view.deckReveal!.split(","))).commitment == view.commitment;
+    final practice = view.seats.any((seat) => seat.isBot) || view.history.any((hand) => hand.hasBots);
     return showScoreSheet(
       context: context,
       season: view.season,
@@ -507,6 +581,7 @@ class _OnlinePageState extends State<OnlinePage> {
       names: names,
       totals: view.running,
       handStillGoing: view.status == "playing",
+      practiceWithComputers: practice,
       commitment: view.commitment,
       deckReveal: view.deckReveal,
       commitmentMatches: view.deckReveal == null ? null : matches,

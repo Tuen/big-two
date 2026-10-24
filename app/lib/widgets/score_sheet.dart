@@ -93,6 +93,7 @@ Future<void> showScoreSheet({
   required List<int> totals,
   required bool handStillGoing,
   required List<ScoreHand> hands,
+  bool practiceWithComputers = false,
   String? commitment,
   String? deckReveal,
   bool? commitmentMatches,
@@ -116,6 +117,10 @@ Future<void> showScoreSheet({
               Center(child: Container(width: 48, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(4)))),
               const SizedBox(height: 12),
               Text("Round $round  ·  Season $season", style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+              if (practiceWithComputers) ...[
+                const SizedBox(height: 6),
+                const Text("Practice (computer players)", style: TextStyle(fontSize: 18, color: gold, fontWeight: FontWeight.w700)),
+              ],
               const SizedBox(height: 6),
               Text(
                 handStillGoing ? "Card points are added when the hand ends. A bonus is already in the total." : "Lower score wins.",

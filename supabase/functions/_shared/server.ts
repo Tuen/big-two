@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { chooseMove, type Difficulty } from "./bots/choose.ts";
 import { formatCard, parseCards, type Card } from "./rules/cards.ts";
 import {
   applyPass,
@@ -241,6 +242,8 @@ function resultJson(row: Row) {
     commitment: row.commitment,
     deckReveal: row.deck_reveal,
     scoreStatus: row.webhook_status ?? null,
+    hasBots: Boolean(row.has_bots),
+    bots: Array.isArray(row.bots) ? row.bots.map((name: unknown) => String(name)) : [],
   };
 }
 
@@ -264,8 +267,15 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
     seats: [0, 1, 2, 3].map((index) => {
       const seat = seats.find((item) => item.seat_index === index);
       return seat
-        ? { seat: index, name: seat.display_name, connected: connected(seat), userId: seat.user_id }
-        : { seat: index, name: null, connected: false, userId: null };
+        ? {
+            seat: index,
+            name: seat.display_name,
+            connected: Boolean(seat.is_bot) || connected(seat),
+            userId: seat.user_id,
+            isBot: Boolean(seat.is_bot),
+            difficulty: seat.is_bot ? seat.bot_difficulty : null,
+          }
+        : { seat: index, name: null, connected: false, userId: null, isBot: false, difficulty: null };
     }),
     history,
     archive,
@@ -386,6 +396,7 @@ async function saveProjection(
   if (state.status === "complete" && step.result) {
     const result = step.result;
     const date = formatDate(new Date(), settingsOf(table).timezone);
+    const bots = botNames(seats);
     const body: WebhookPayload = webhookPayload({
       handId: hand.id,
       tableCode: table.code,
@@ -399,6 +410,8 @@ async function saveProjection(
       runningTotals: result.runningTotals,
       roundOver: result.roundOver,
       bonuses: result.bonuses,
+      hasBots: bots.length > 0,
+      bots,
     });
     patch.deck_reveal = deckText;
     patch.round_over = result.roundOver;
@@ -420,6 +433,8 @@ async function saveProjection(
       commitment: hand.commitment,
       deck_reveal: deckText,
       webhook_status: "pending",
+      has_bots: body.hasBots,
+      bots: body.bots,
     });
     if (resultError) throw new HttpError(500, resultError.message);
     const { error: tableError } = await admin
@@ -442,7 +457,9 @@ async function saveProjection(
   if (state.status === "complete") await sendWebhook(admin, hand.id);
 }
 
-const WEBHOOK_TRIES = 5;
+const WEBHOOK_BURST = 5;
+const WEBHOOK_CAP = 15;
+const WEBHOOK_CLAIM_MS = 60_000;
 
 function webhookHeaders(): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -458,37 +475,63 @@ function webhookHeaders(): Record<string, string> {
 async function markWebhook(admin: SupabaseClient, handId: string, status: string, attempts?: number) {
   const patch: Row = { webhook_status: status };
   if (attempts != null) patch.webhook_attempts = attempts;
+  if (status === "sent" || status === "failed" || status === "skipped") patch.webhook_claimed_at = null;
   await admin.from("hands").update(patch).eq("id", handId);
   await admin.from("hand_results").update({ webhook_status: status }).eq("hand_id", handId);
 }
 
 async function sendWebhook(admin: SupabaseClient, handId: string): Promise<void> {
   const url = Deno.env.get("SCORE_WEBHOOK_URL");
-  const { data: hand, error } = await admin.from("hands").select("webhook_status, webhook_attempts, webhook_body").eq("id", handId).single();
+  const { data: hand, error } = await admin
+    .from("hands")
+    .select("webhook_status, webhook_attempts, webhook_body, webhook_claimed_at")
+    .eq("id", handId)
+    .single();
   if (error || !hand) return;
+  const status = String(hand.webhook_status ?? "");
   if (!url) {
-    if (hand.webhook_status === "pending") await markWebhook(admin, handId, "skipped");
+    if (status === "pending") await markWebhook(admin, handId, "skipped");
     return;
   }
-  if (hand.webhook_status !== "pending" && hand.webhook_status !== "failed" && hand.webhook_status !== "sending") return;
+  if (status !== "pending" && status !== "failed" && status !== "sending") return;
   let tries = Number(hand.webhook_attempts ?? 0);
-  if (tries >= WEBHOOK_TRIES) {
+  if (tries >= WEBHOOK_CAP) {
     await markWebhook(admin, handId, "failed", tries);
     return;
   }
-  const { data: claimed, error: claimError } = await admin
-    .from("hands")
-    .update({ webhook_status: "sending" })
-    .eq("id", handId)
-    .in("webhook_status", ["pending", "failed", "sending"])
-    .select("id");
-  if (claimError || !claimed?.length) return;
 
+  const now = new Date().toISOString();
+  let claimed = false;
+  if (status === "pending" || status === "failed") {
+    const { data, error: claimError } = await admin
+      .from("hands")
+      .update({ webhook_status: "sending", webhook_claimed_at: now })
+      .eq("id", handId)
+      .in("webhook_status", ["pending", "failed"])
+      .select("id");
+    claimed = !claimError && Boolean(data?.length);
+  } else {
+    const claimedAt = hand.webhook_claimed_at ? new Date(hand.webhook_claimed_at).getTime() : 0;
+    if (hand.webhook_claimed_at && Date.now() - claimedAt < WEBHOOK_CLAIM_MS) return;
+    let claim = admin
+      .from("hands")
+      .update({ webhook_status: "sending", webhook_claimed_at: now })
+      .eq("id", handId)
+      .eq("webhook_status", "sending");
+    claim = hand.webhook_claimed_at ? claim.eq("webhook_claimed_at", hand.webhook_claimed_at) : claim.is("webhook_claimed_at", null);
+    const { data, error: claimError } = await claim.select("id");
+    claimed = !claimError && Boolean(data?.length);
+  }
+  if (!claimed) return;
+
+  const later = status === "failed";
+  const budget = later ? 1 : Math.min(WEBHOOK_BURST, WEBHOOK_CAP - tries);
+  const limit = tries + budget;
   const headers = webhookHeaders();
   const started = tries;
   const body = JSON.stringify(hand.webhook_body);
   let sent = false;
-  while (tries < WEBHOOK_TRIES && !sent) {
+  while (tries < limit && !sent) {
     tries += 1;
     await admin.from("hands").update({ webhook_status: "sending", webhook_attempts: tries }).eq("id", handId);
     let statusCode: number | null = null;
@@ -507,7 +550,7 @@ async function sendWebhook(admin: SupabaseClient, handId: string): Promise<void>
       status_code: statusCode,
       detail: detail || null,
     });
-    if (!sent && tries < WEBHOOK_TRIES) {
+    if (!sent && tries < limit) {
       await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** (tries - started - 1)));
     }
   }
@@ -614,11 +657,14 @@ async function act(
   userId: string,
   kind: "play" | "pass" | "timeout",
   cards: string[],
+  botSeat?: number,
 ) {
   const table = await loadTable(admin, tableId);
   const seats = await loadSeats(admin, tableId);
   const settings = settingsOf(table);
-  const me = requireSeat(seats, userId);
+  const me = botSeat == null ? requireSeat(seats, userId) : seats.find((seat) => seat.seat_index === botSeat);
+  if (!me) throw new HttpError(400, "That seat is empty");
+  if (botSeat != null && !me.is_bot) throw new HttpError(400, "Only a computer player can be moved this way");
   for (let attempt = 0; attempt < 3; attempt++) {
     const hand = await latestHand(admin, tableId);
     if (!hand || hand.status !== "playing") throw new HttpError(400, "There is no hand to play");
@@ -647,6 +693,116 @@ async function act(
     return;
   }
   throw new HttpError(409, "The table changed. Try that again.");
+}
+
+const BOT_NAMES = ["Bot Ruby", "Bot Jade", "Bot Pearl", "Bot Amber"];
+const BOT_LOOP = 16;
+const BOT_SLEEP_BUDGET = 8_000;
+
+function botNames(seats: Row[]): string[] {
+  return seats
+    .filter((seat) => seat.is_bot)
+    .sort((a, b) => a.seat_index - b.seat_index)
+    .map((seat) => String(seat.display_name));
+}
+
+function nextBotName(seats: Row[]): string {
+  const used = new Set(seats.map((seat) => seat.display_name));
+  return BOT_NAMES.find((name) => !used.has(name)) ?? `Bot ${seats.length + 1}`;
+}
+
+function thinkDelay(handId: string, seq: number): number {
+  let hash = 2166136261;
+  const text = `${handId}:${seq}`;
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return 800 + ((hash >>> 0) % 1201);
+}
+
+async function cardsPlayed(admin: SupabaseClient, handId: string): Promise<Card[]> {
+  const events = await must(
+    admin.from("events").select("kind, payload").eq("hand_id", handId).order("seq"),
+  );
+  const ids: string[] = [];
+  for (const event of events as Row[]) {
+    if (event.kind === "play" && Array.isArray(event.payload?.cards)) {
+      for (const card of event.payload.cards) ids.push(String(card));
+    }
+  }
+  return parseCards(ids);
+}
+
+async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
+  let slept = 0;
+  try {
+    for (let step = 0; step < BOT_LOOP; step++) {
+      const table = await loadTable(admin, tableId);
+      if (table.status !== "playing") return;
+      const hand = await latestHand(admin, tableId);
+      if (!hand || hand.status !== "playing") return;
+      const seats = await loadSeats(admin, tableId);
+      const settings = settingsOf(table);
+      const played = await replayHand(admin, hand, settings);
+      const state = played.step.state;
+      if (state.status !== "playing") return;
+      const seat = seats.find((item) => item.seat_index === state.turn);
+      if (!seat?.is_bot) return;
+
+      let liveHand = hand;
+      let liveState = state;
+      const delay = thinkDelay(liveHand.id, played.eventCount);
+      const elapsed = Date.now() - new Date(liveHand.turn_started_at).getTime();
+      const wait = Math.max(0, delay - elapsed);
+      if (wait > 0 && slept + wait <= BOT_SLEEP_BUDGET) {
+        await new Promise((resolve) => setTimeout(resolve, wait));
+        slept += wait;
+        const refreshed = await latestHand(admin, tableId);
+        if (!refreshed || refreshed.status !== "playing") return;
+        const again = await replayHand(admin, refreshed, settings);
+        if (again.step.state.status !== "playing" || again.step.state.turn !== seat.seat_index) continue;
+        liveHand = refreshed;
+        liveState = again.step.state;
+      }
+
+      const difficulty = String(seat.bot_difficulty ?? "normal");
+      const level: Difficulty = difficulty === "easy" || difficulty === "hard" ? difficulty : "normal";
+      const move = chooseMove({
+        seat: seat.seat_index,
+        hand: liveState.hands[seat.seat_index],
+        played: await cardsPlayed(admin, liveHand.id),
+        counts: liveState.hands.map((cards) => cards.length),
+        trick: liveState.trick,
+        trickSeat: liveState.trickSeat,
+        firstLead: liveState.firstLead,
+        running: liveState.running,
+        settings,
+        difficulty: level,
+        rng: () => {
+          const buffer = new Uint32Array(1);
+          crypto.getRandomValues(buffer);
+          return buffer[0] / 4294967296;
+        },
+        locked: liveState.locked,
+      });
+      try {
+        await act(
+          admin,
+          tableId,
+          seat.user_id,
+          move.kind,
+          move.kind === "play" ? move.cards : [],
+          seat.seat_index,
+        );
+      } catch (error) {
+        console.error(error);
+        return;
+      }
+    }
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 function shuffledSeatOrder(seats: Row[]): (string | null)[] {
@@ -793,6 +949,47 @@ export async function handleTable(req: Request): Promise<Response> {
     return json({ view: await buildView(admin, tableId, userId) });
   }
 
+  if (action === "add_bot") {
+    const table = await loadTable(admin, tableId);
+    const seats = await loadSeats(admin, tableId);
+    requireSeat(seats, userId);
+    if (table.host_id !== userId) throw new HttpError(403, "Only the host can add a computer player");
+    if (table.status !== "lobby") throw new HttpError(400, "Computer players can be added before the deal");
+    const seatIndex = Number(body.seat);
+    if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex > 3) throw new HttpError(400, "Choose a seat");
+    if (seats.some((seat) => seat.seat_index === seatIndex)) throw new HttpError(400, "That seat is taken");
+    const difficulty = String(body.difficulty ?? "normal").toLowerCase();
+    if (difficulty !== "easy" && difficulty !== "normal" && difficulty !== "hard") {
+      throw new HttpError(400, "Choose Easy, Normal, or Hard");
+    }
+    const { error } = await admin.from("seats").insert({
+      table_id: tableId,
+      seat_index: seatIndex,
+      user_id: crypto.randomUUID(),
+      display_name: nextBotName(seats),
+      is_bot: true,
+      bot_difficulty: difficulty,
+    });
+    if (error) throw new HttpError(400, "That seat was just taken. Try again.");
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
+  if (action === "remove_bot") {
+    const table = await loadTable(admin, tableId);
+    const seats = await loadSeats(admin, tableId);
+    requireSeat(seats, userId);
+    if (table.host_id !== userId) throw new HttpError(403, "Only the host can remove a computer player");
+    if (table.status !== "lobby") throw new HttpError(400, "Computer players can be removed before the deal");
+    const seatIndex = Number(body.seat);
+    if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex > 3) throw new HttpError(400, "Choose a seat");
+    const seat = seats.find((item) => item.seat_index === seatIndex);
+    if (!seat) throw new HttpError(400, "That seat is empty");
+    if (!seat.is_bot) throw new HttpError(400, "Only a computer player can be removed this way");
+    const { error } = await admin.from("seats").delete().eq("table_id", tableId).eq("seat_index", seatIndex).eq("is_bot", true);
+    if (error) throw new HttpError(500, error.message);
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
   if (action === "rename") {
     const table = await loadTable(admin, tableId);
     const seats = await loadSeats(admin, tableId);
@@ -841,6 +1038,7 @@ export async function handleDeal(req: Request): Promise<Response> {
   const table = await loadTable(admin, tableId);
   const seats = await loadSeats(admin, tableId);
   await dealHand(admin, table, seats, userId);
+  await runBots(admin, tableId);
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -851,6 +1049,7 @@ export async function handlePlay(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "play", cards);
+  await runBots(admin, tableId);
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -860,6 +1059,7 @@ export async function handlePass(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "pass", []);
+  await runBots(admin, tableId);
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -886,6 +1086,8 @@ export async function handleTick(req: Request): Promise<Response> {
       hand = await latestHand(admin, tableId);
     }
   }
+  if (hand?.status === "playing") await runBots(admin, tableId);
+  hand = await latestHand(admin, tableId);
   if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
     await sendWebhook(admin, hand.id);
   }

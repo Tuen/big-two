@@ -5,7 +5,16 @@ class SeatInfo {
   final String? name;
   final bool connected;
   final String? userId;
-  const SeatInfo({required this.seat, required this.name, required this.connected, required this.userId});
+  final bool isBot;
+  final String? difficulty;
+  const SeatInfo({
+    required this.seat,
+    required this.name,
+    required this.connected,
+    required this.userId,
+    this.isBot = false,
+    this.difficulty,
+  });
 }
 
 class TrickInfo {
@@ -45,6 +54,8 @@ class HistoryHand {
   final List<Map<String, dynamic>> bonuses;
   final bool roundOver;
   final String? scoreStatus;
+  final bool hasBots;
+  final List<String> bots;
   final String commitment;
   final String deckReveal;
   const HistoryHand({
@@ -58,6 +69,8 @@ class HistoryHand {
     required this.bonuses,
     required this.roundOver,
     required this.scoreStatus,
+    this.hasBots = false,
+    this.bots = const [],
     required this.commitment,
     required this.deckReveal,
   });
@@ -150,6 +163,8 @@ class TableSnapshot {
             name: _map(seat)["name"]?.toString(),
             connected: _map(seat)["connected"] == true,
             userId: _map(seat)["userId"]?.toString(),
+            isBot: _map(seat)["isBot"] == true,
+            difficulty: _map(seat)["difficulty"]?.toString(),
           ),
       ],
       yourCards: [for (final card in (json["yourCards"] as List? ?? const [])) card.toString()],
@@ -192,6 +207,8 @@ class TableSnapshot {
             bonuses: [for (final bonus in (_map(row)["bonuses"] as List? ?? const [])) _map(bonus)],
             roundOver: _map(row)["roundOver"] == true,
             scoreStatus: _map(row)["scoreStatus"]?.toString(),
+            hasBots: _map(row)["hasBots"] == true,
+            bots: [for (final name in (_map(row)["bots"] as List? ?? const [])) name.toString()],
             commitment: _map(row)["commitment"]?.toString() ?? "",
             deckReveal: _map(row)["deckReveal"]?.toString() ?? "",
           ),
