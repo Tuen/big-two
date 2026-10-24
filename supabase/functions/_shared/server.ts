@@ -1,0 +1,900 @@
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { formatCard, parseCards, type Card } from "./rules/cards.ts";
+import {
+  applyPass,
+  applyPlay,
+  applyTimeout,
+  replay,
+  roundWinners,
+  type ReplayEvent,
+  type Settings,
+  type StepOk,
+  DEFAULT_SETTINGS,
+} from "./rules/game.ts";
+import { commitDeck, cryptoUint32, shuffleDeck, shuffleInPlace } from "./rules/shuffle.ts";
+import { formatDate, webhookPayload, type WebhookPayload } from "./rules/score.ts";
+
+const corsHeaders: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+};
+
+const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const TIMEZONES = [
+  "Australia/Melbourne",
+  "Australia/Sydney",
+  "Australia/Brisbane",
+  "Australia/Adelaide",
+  "Australia/Perth",
+  "Pacific/Auckland",
+  "UTC",
+];
+
+export class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+export function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+export function serveAction(action: (req: Request) => Promise<Response>): void {
+  Deno.serve(async (req) => {
+    if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+    try {
+      return await action(req);
+    } catch (error) {
+      if (error instanceof HttpError) return json({ error: error.message }, error.status);
+      console.error(error);
+      return json({ error: "Something went wrong on the server" }, 500);
+    }
+  });
+}
+
+function env(name: string): string {
+  const value = Deno.env.get(name);
+  if (!value) throw new HttpError(500, `Missing server setting ${name}`);
+  return value;
+}
+
+export function adminClient(): SupabaseClient {
+  return createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function requireUser(req: Request): Promise<string> {
+  const header = req.headers.get("Authorization");
+  if (!header) throw new HttpError(401, "Sign in first");
+  const client = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
+    global: { headers: { Authorization: header } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data, error } = await client.auth.getUser();
+  if (error || !data.user) throw new HttpError(401, "Sign in first");
+  return data.user.id;
+}
+
+async function readBody(req: Request): Promise<Record<string, unknown>> {
+  if (req.method === "GET") return {};
+  try {
+    const body = await req.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+    return body as Record<string, unknown>;
+  } catch {
+    throw new HttpError(400, "Send a JSON body");
+  }
+}
+
+function cleanName(value: unknown): string {
+  const name = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!name) throw new HttpError(400, "Enter your name");
+  if (name.length > 24) throw new HttpError(400, "Use a name of 24 characters or fewer");
+  return name;
+}
+
+function cleanSettings(value: unknown, fallback: Settings = DEFAULT_SETTINGS): Settings {
+  const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const timer = Number(raw.turnTimerSeconds ?? fallback.turnTimerSeconds);
+  const season = Number(raw.season ?? fallback.season);
+  const firstRound = Number(raw.firstRoundNumber ?? fallback.firstRoundNumber);
+  const timezone = String(raw.timezone ?? fallback.timezone);
+  return {
+    passLocks: Boolean(raw.passLocks ?? fallback.passLocks),
+    straightsWrap: Boolean(raw.straightsWrap ?? fallback.straightsWrap),
+    turnTimerSeconds: [0, 15, 30, 45, 60].includes(timer) ? timer : 0,
+    season: Number.isInteger(season) && season >= 1 && season <= 99 ? season : fallback.season,
+    timezone: TIMEZONES.includes(timezone) ? timezone : fallback.timezone,
+    firstRoundNumber: Number.isInteger(firstRound) && firstRound >= 1 && firstRound <= 999
+      ? firstRound
+      : fallback.firstRoundNumber,
+  };
+}
+
+function roomCode(): string {
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => ALPHABET[byte % ALPHABET.length]).join("");
+}
+
+type Row = Record<string, any>;
+
+async function must<T>(promise: PromiseLike<{ data: T; error: { message: string } | null }>): Promise<T> {
+  const { data, error } = await promise;
+  if (error) throw new HttpError(500, error.message);
+  return data;
+}
+
+function settingsOf(table: Row): Settings {
+  return cleanSettings(table.settings);
+}
+
+function namesOf(seats: Row[]): (string | null)[] {
+  const names: (string | null)[] = [null, null, null, null];
+  for (const seat of seats) names[seat.seat_index] = seat.display_name;
+  return names;
+}
+
+async function touch(admin: SupabaseClient, tableId: string, userId: string): Promise<void> {
+  const { error } = await admin
+    .from("seats")
+    .update({ last_seen: new Date().toISOString() })
+    .eq("table_id", tableId)
+    .eq("user_id", userId);
+  if (error) throw new HttpError(500, error.message);
+}
+
+async function loadTable(admin: SupabaseClient, tableId: string): Promise<Row> {
+  const { data, error } = await admin.from("game_tables").select("*").eq("id", tableId).maybeSingle();
+  if (error) throw new HttpError(500, error.message);
+  if (!data) throw new HttpError(404, "That table does not exist");
+  return data;
+}
+
+async function loadSeats(admin: SupabaseClient, tableId: string): Promise<Row[]> {
+  return await must(admin.from("seats").select("*").eq("table_id", tableId).order("seat_index"));
+}
+
+function requireSeat(seats: Row[], userId: string): Row {
+  const seat = seats.find((item) => item.user_id === userId);
+  if (!seat) throw new HttpError(403, "You are not at this table");
+  return seat;
+}
+
+async function latestHand(admin: SupabaseClient, tableId: string): Promise<Row | null> {
+  const { data, error } = await admin
+    .from("hands")
+    .select("*")
+    .eq("table_id", tableId)
+    .order("round_number", { ascending: false })
+    .order("hand_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new HttpError(500, error.message);
+  return data;
+}
+
+async function replayHand(admin: SupabaseClient, hand: Row, settings: Settings) {
+  const { data: secret, error } = await admin.from("hand_secrets").select("deck").eq("hand_id", hand.id).single();
+  if (error) throw new HttpError(500, error.message);
+  const events = await must(
+    admin.from("events").select("seat_index, kind, payload").eq("hand_id", hand.id).order("seq"),
+  );
+  const deck = parseCards(String(secret.deck).split(","));
+  const log: ReplayEvent[] = (events as Row[]).map((event) => ({
+    kind: event.kind,
+    seat: event.seat_index,
+    cards: event.payload?.cards ?? [],
+  }));
+  const step = replay(deck, hand.running_at_start, hand.first_hand, hand.previous_winner, log, settings);
+  if (!step.ok) throw new HttpError(500, step.message);
+  return { step, eventCount: log.length, deckText: String(secret.deck) };
+}
+
+function connected(seat: Row): boolean {
+  return Date.now() - new Date(seat.last_seen).getTime() < 20_000;
+}
+
+async function historyFor(admin: SupabaseClient, tableId: string, roundNumber: number) {
+  const rows = await must(
+    admin
+      .from("hand_results")
+      .select("*")
+      .eq("table_id", tableId)
+      .order("round_number")
+      .order("hand_number"),
+  );
+  const history = (rows as Row[])
+    .filter((row) => row.round_number === roundNumber)
+    .map(resultJson);
+  const archive = (rows as Row[])
+    .filter((row) => row.round_over && row.round_number !== roundNumber)
+    .map((row) => ({
+      round: row.round_number,
+      players: row.players,
+      runningTotals: row.running_totals,
+      winners: roundWinners(row.running_totals),
+    }));
+  return { history, archive };
+}
+
+function resultJson(row: Row) {
+  return {
+    hand: row.hand_number,
+    round: row.round_number,
+    players: row.players,
+    cardsLeft: row.cards_left,
+    handPoints: row.hand_points,
+    runningTotals: row.running_totals,
+    bonuses: row.bonuses,
+    winner: row.winner_seat,
+    roundOver: row.round_over,
+    date: row.played_on,
+    commitment: row.commitment,
+    deckReveal: row.deck_reveal,
+    scoreStatus: row.webhook_status ?? null,
+  };
+}
+
+export async function buildView(admin: SupabaseClient, tableId: string, userId: string) {
+  await touch(admin, tableId, userId);
+  const table = await loadTable(admin, tableId);
+  const seats = await loadSeats(admin, tableId);
+  const me = requireSeat(seats, userId);
+  const settings = settingsOf(table);
+  const hand = await latestHand(admin, tableId);
+  const { history, archive } = await historyFor(admin, tableId, table.round_number);
+  const base = {
+    tableId: table.id,
+    code: table.code,
+    status: table.status,
+    hostId: table.host_id,
+    you: me.seat_index,
+    season: table.season,
+    round: table.round_number,
+    settings,
+    seats: [0, 1, 2, 3].map((index) => {
+      const seat = seats.find((item) => item.seat_index === index);
+      return seat
+        ? { seat: index, name: seat.display_name, connected: connected(seat), userId: seat.user_id }
+        : { seat: index, name: null, connected: false, userId: null };
+    }),
+    history,
+    archive,
+    canDeal: seats.length === 4 && (table.status === "lobby" || table.status === "hand_end"),
+    canNewRound: table.status === "round_end",
+    canEditSettings: table.status === "lobby" && !hand,
+  };
+
+  if (table.status === "lobby") {
+    const message = seats.length === 4
+      ? hand
+        ? `Round ${table.round_number}. Set the seating, then deal. Seat 1 leads.`
+        : "Everyone is here. Seat 1 leads, then play goes to the left."
+      : "Waiting for four players.";
+    return {
+      ...base,
+      hand: 0,
+      yourCards: [] as string[],
+      counts: [0, 0, 0, 0],
+      turn: null,
+      firstLead: false,
+      trick: null,
+      consecutivePasses: 0,
+      locked: [] as number[],
+      running: [0, 0, 0, 0],
+      commitment: null,
+      deckReveal: null,
+      message,
+      result: null,
+      turnStartedAt: null,
+      roundOver: false,
+    };
+  }
+
+  if (!hand) {
+    return {
+      ...base,
+      hand: 0,
+      yourCards: [] as string[],
+      counts: [0, 0, 0, 0],
+      turn: null,
+      firstLead: false,
+      trick: null,
+      consecutivePasses: 0,
+      locked: [] as number[],
+      running: [0, 0, 0, 0],
+      commitment: null,
+      deckReveal: null,
+      message: seats.length === 4 ? "Everyone is here. Deal the first hand." : "Waiting for four players.",
+      result: null,
+      turnStartedAt: null,
+      roundOver: false,
+    };
+  }
+
+  const { step } = await replayHand(admin, hand, settings);
+  const state = step.state;
+  const score = step.result;
+  const names = namesOf(seats).map((name, index) => name ?? `Seat ${index + 1}`);
+  return {
+    ...base,
+    hand: hand.hand_number,
+    yourCards: state.hands[me.seat_index].map(formatCard),
+    counts: state.hands.map((cards) => cards.length),
+    turn: state.status === "playing" ? state.turn : null,
+    firstLead: state.firstLead,
+    trick: state.trick
+      ? { seat: state.trickSeat, cards: state.trickCards, label: state.trick.label }
+      : null,
+    consecutivePasses: state.consecutivePasses,
+    locked: state.locked,
+    running: score ? score.runningTotals : state.running,
+    commitment: hand.commitment,
+    deckReveal: hand.deck_reveal,
+    message: hand.last_message ?? step.message,
+    result: score
+      ? {
+          cardsLeft: score.cardsLeft,
+          cardPoints: score.cardPoints,
+          bonusReceived: score.bonusReceived,
+          handPoints: score.handPoints,
+          runningTotals: score.runningTotals,
+          roundOver: score.roundOver,
+          winner: score.winner,
+          closedReason: score.closedReason,
+          bonuses: score.bonuses.map((bonus) => ({
+            seat: bonus.seat,
+            player: names[bonus.seat],
+            combo: bonus.combo,
+            pointsEach: bonus.pointsEach,
+          })),
+        }
+      : null,
+    turnStartedAt: hand.turn_started_at,
+    roundOver: Boolean(hand.round_over),
+  };
+}
+
+async function saveProjection(
+  admin: SupabaseClient,
+  table: Row,
+  hand: Row,
+  seats: Row[],
+  step: StepOk,
+  deckText: string,
+) {
+  const state = step.state;
+  const names = namesOf(seats).map((name, index) => name ?? `Seat ${index + 1}`);
+  const now = new Date().toISOString();
+  const patch: Row = {
+    status: state.status === "complete" ? "complete" : "playing",
+    turn_seat: state.status === "playing" ? state.turn : null,
+    turn_started_at: now,
+    last_message: step.message,
+    winner_seat: state.winner,
+  };
+
+  if (state.status === "complete" && step.result) {
+    const result = step.result;
+    const date = formatDate(new Date(), settingsOf(table).timezone);
+    const body: WebhookPayload = webhookPayload({
+      handId: hand.id,
+      tableCode: table.code,
+      season: table.season,
+      round: hand.round_number,
+      hand: hand.hand_number,
+      date,
+      players: names,
+      cardsLeft: result.cardsLeft,
+      handPoints: result.handPoints,
+      runningTotals: result.runningTotals,
+      roundOver: result.roundOver,
+      bonuses: result.bonuses,
+    });
+    patch.deck_reveal = deckText;
+    patch.round_over = result.roundOver;
+    patch.webhook_status = "pending";
+    patch.webhook_body = body;
+    const { error: resultError } = await admin.from("hand_results").upsert({
+      hand_id: hand.id,
+      table_id: table.id,
+      round_number: hand.round_number,
+      hand_number: hand.hand_number,
+      players: names,
+      cards_left: result.cardsLeft,
+      hand_points: result.handPoints,
+      running_totals: result.runningTotals,
+      bonuses: body.bonuses,
+      winner_seat: result.winner,
+      round_over: result.roundOver,
+      played_on: date,
+      commitment: hand.commitment,
+      deck_reveal: deckText,
+      webhook_status: "pending",
+    });
+    if (resultError) throw new HttpError(500, resultError.message);
+    const { error: tableError } = await admin
+      .from("game_tables")
+      .update({ status: result.roundOver ? "round_end" : "hand_end" })
+      .eq("id", table.id);
+    if (tableError) throw new HttpError(500, tableError.message);
+  }
+
+  const { error } = await admin.from("hands").update(patch).eq("id", hand.id);
+  if (error) throw new HttpError(500, error.message);
+  for (let seat = 0; seat < 4; seat++) {
+    const { error: holdingError } = await admin.from("holdings").upsert({
+      hand_id: hand.id,
+      seat_index: seat,
+      cards: state.hands[seat].map(formatCard),
+    });
+    if (holdingError) throw new HttpError(500, holdingError.message);
+  }
+  if (state.status === "complete") await sendWebhook(admin, hand.id);
+}
+
+const WEBHOOK_TRIES = 5;
+
+function webhookHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const key = Deno.env.get("SCORE_WEBHOOK_KEY") || Deno.env.get("SCORE_WEBHOOK_SECRET") || "";
+  const named = Deno.env.get("SCORE_WEBHOOK_KEY_HEADER")?.trim() ?? "";
+  const namedOk = /^[A-Za-z0-9-]{1,64}$/.test(named);
+  const legacyOnly = Boolean(Deno.env.get("SCORE_WEBHOOK_SECRET")) && !Deno.env.get("SCORE_WEBHOOK_KEY");
+  const headerName = namedOk ? named : legacyOnly ? "X-Score-Secret" : "X-Score-Key";
+  if (key) headers[headerName] = key;
+  return headers;
+}
+
+async function markWebhook(admin: SupabaseClient, handId: string, status: string, attempts?: number) {
+  const patch: Row = { webhook_status: status };
+  if (attempts != null) patch.webhook_attempts = attempts;
+  await admin.from("hands").update(patch).eq("id", handId);
+  await admin.from("hand_results").update({ webhook_status: status }).eq("hand_id", handId);
+}
+
+async function sendWebhook(admin: SupabaseClient, handId: string): Promise<void> {
+  const url = Deno.env.get("SCORE_WEBHOOK_URL");
+  const { data: hand, error } = await admin.from("hands").select("webhook_status, webhook_attempts, webhook_body").eq("id", handId).single();
+  if (error || !hand) return;
+  if (!url) {
+    if (hand.webhook_status === "pending") await markWebhook(admin, handId, "skipped");
+    return;
+  }
+  if (hand.webhook_status !== "pending" && hand.webhook_status !== "failed" && hand.webhook_status !== "sending") return;
+  let tries = Number(hand.webhook_attempts ?? 0);
+  if (tries >= WEBHOOK_TRIES) {
+    await markWebhook(admin, handId, "failed", tries);
+    return;
+  }
+  const { data: claimed, error: claimError } = await admin
+    .from("hands")
+    .update({ webhook_status: "sending" })
+    .eq("id", handId)
+    .in("webhook_status", ["pending", "failed", "sending"])
+    .select("id");
+  if (claimError || !claimed?.length) return;
+
+  const headers = webhookHeaders();
+  const started = tries;
+  const body = JSON.stringify(hand.webhook_body);
+  let sent = false;
+  while (tries < WEBHOOK_TRIES && !sent) {
+    tries += 1;
+    await admin.from("hands").update({ webhook_status: "sending", webhook_attempts: tries }).eq("id", handId);
+    let statusCode: number | null = null;
+    let detail = "";
+    try {
+      const response = await fetch(url, { method: "POST", headers, body });
+      statusCode = response.status;
+      sent = response.ok;
+      if (!sent) detail = `HTTP ${response.status}`;
+    } catch (error) {
+      detail = String(error instanceof Error ? error.message : error).slice(0, 200);
+    }
+    await admin.from("webhook_log").insert({
+      hand_id: handId,
+      ok: sent,
+      status_code: statusCode,
+      detail: detail || null,
+    });
+    if (!sent && tries < WEBHOOK_TRIES) {
+      await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** (tries - started - 1)));
+    }
+  }
+  await markWebhook(admin, handId, sent ? "sent" : "failed", tries);
+}
+
+async function claimLobby(admin: SupabaseClient, tableId: string) {
+  const { data, error } = await admin
+    .from("game_tables")
+    .update({ status: "playing" })
+    .eq("id", tableId)
+    .eq("status", "lobby")
+    .select("id");
+  if (error) throw new HttpError(500, error.message);
+  if (!data || data.length === 0) throw new HttpError(409, "The table changed. Try that again.");
+}
+
+async function releaseLobby(admin: SupabaseClient, tableId: string) {
+  await admin.from("game_tables").update({ status: "lobby" }).eq("id", tableId).eq("status", "playing");
+}
+
+async function dealHand(admin: SupabaseClient, table: Row, seats: Row[], userId: string) {
+  if (seats.length !== 4) throw new HttpError(400, "Wait until four players are seated");
+  requireSeat(seats, userId);
+  const settings = settingsOf(table);
+  const previous = await latestHand(admin, table.id);
+  let roundNumber = table.round_number;
+  let handNumber = 1;
+  let firstHand = true;
+  let previousWinner: number | null = null;
+  let running = [0, 0, 0, 0];
+  let lobbyDeal = false;
+
+  if (!previous || previous.round_number !== table.round_number) {
+    if (table.status !== "lobby") throw new HttpError(400, "The table is not ready to deal");
+    lobbyDeal = true;
+  } else if (previous.status !== "complete") {
+    throw new HttpError(400, "The current hand is still going");
+  } else if (previous.round_over) {
+    throw new HttpError(400, "Start a new round before dealing");
+  } else {
+    const { step } = await replayHand(admin, previous, settings);
+    if (!step.result) throw new HttpError(500, "The last hand has no score");
+    roundNumber = previous.round_number;
+    handNumber = previous.hand_number + 1;
+    firstHand = false;
+    previousWinner = step.result.winner;
+    running = step.result.runningTotals;
+  }
+
+  if (lobbyDeal) {
+    await claimLobby(admin, table.id);
+    seats = await loadSeats(admin, table.id);
+    if (seats.length !== 4) {
+      await releaseLobby(admin, table.id);
+      throw new HttpError(400, "Wait until four players are seated");
+    }
+    requireSeat(seats, userId);
+  }
+
+  const deck: Card[] = shuffleDeck();
+  const committed = await commitDeck(deck);
+  const { data: hand, error } = await admin
+    .from("hands")
+    .insert({
+      table_id: table.id,
+      round_number: roundNumber,
+      hand_number: handNumber,
+      first_hand: firstHand,
+      previous_winner: previousWinner,
+      running_at_start: running,
+      commitment: committed.commitment,
+      status: "playing",
+      last_message: "Deal",
+    })
+    .select("*")
+    .single();
+  if (error) {
+    if (lobbyDeal) await releaseLobby(admin, table.id);
+    throw new HttpError(400, "The hand was already dealt");
+  }
+  const { error: secretError } = await admin.from("hand_secrets").insert({ hand_id: hand.id, deck: committed.canonical });
+  if (secretError) {
+    await admin.from("hands").delete().eq("id", hand.id);
+    if (lobbyDeal) await releaseLobby(admin, table.id);
+    throw new HttpError(500, secretError.message);
+  }
+  const { error: tableError } = await admin.from("game_tables").update({ status: "playing" }).eq("id", table.id);
+  if (tableError) throw new HttpError(500, tableError.message);
+  const dealt = await replayHand(admin, hand, settings);
+  await saveProjection(
+    admin,
+    table,
+    hand,
+    seats,
+    { ok: true, state: dealt.step.state, result: null, message: "Deal" },
+    committed.canonical,
+  );
+}
+
+async function act(
+  admin: SupabaseClient,
+  tableId: string,
+  userId: string,
+  kind: "play" | "pass" | "timeout",
+  cards: string[],
+) {
+  const table = await loadTable(admin, tableId);
+  const seats = await loadSeats(admin, tableId);
+  const settings = settingsOf(table);
+  const me = requireSeat(seats, userId);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const hand = await latestHand(admin, tableId);
+    if (!hand || hand.status !== "playing") throw new HttpError(400, "There is no hand to play");
+    const played = await replayHand(admin, hand, settings);
+    if (played.step.state.status !== "playing") throw new HttpError(400, "This hand is over");
+    if (kind !== "timeout" && played.step.state.turn !== me.seat_index) throw new HttpError(400, "Not your turn");
+    const step = kind === "play"
+      ? applyPlay(played.step.state, me.seat_index, cards, settings)
+      : kind === "pass"
+      ? applyPass(played.step.state, me.seat_index, settings)
+      : applyTimeout(played.step.state, settings);
+    if (!step.ok) throw new HttpError(400, step.message);
+    const seat = kind === "timeout" ? played.step.state.turn : me.seat_index;
+    const { error } = await admin.from("events").insert({
+      hand_id: hand.id,
+      seq: played.eventCount + 1,
+      seat_index: seat,
+      kind,
+      payload: { cards: kind === "play" ? step.state.trickCards : [] },
+    });
+    if (error) {
+      if (String(error.code) === "23505" && attempt < 2) continue;
+      throw new HttpError(500, error.message);
+    }
+    await saveProjection(admin, table, hand, seats, step, played.deckText);
+    return;
+  }
+  throw new HttpError(409, "The table changed. Try that again.");
+}
+
+function shuffledSeatOrder(seats: Row[]): (string | null)[] {
+  const order: (string | null)[] = [null, null, null, null];
+  for (const seat of seats) order[seat.seat_index] = seat.user_id;
+  shuffleInPlace(order, cryptoUint32);
+  return order;
+}
+
+function seatOrder(seats: Row[], requested: unknown): (string | null)[] {
+  if (!Array.isArray(requested) || requested.length !== 4) throw new HttpError(400, "Give all four seats");
+  const current = new Set(seats.map((seat) => seat.user_id));
+  const seen = new Set<string>();
+  const order: (string | null)[] = [];
+  for (const item of requested) {
+    if (item == null || item === "") {
+      order.push(null);
+      continue;
+    }
+    const id = String(item);
+    if (!current.has(id) || seen.has(id)) throw new HttpError(400, "That seating does not match the players here");
+    seen.add(id);
+    order.push(id);
+  }
+  if (seen.size !== current.size) throw new HttpError(400, "That seating does not match the players here");
+  return order;
+}
+
+async function writeSeatOrder(admin: SupabaseClient, tableId: string, order: (string | null)[]) {
+  const { error } = await admin.rpc("reorder_seats", { p_table: tableId, p_order: order });
+  if (!error) return;
+  const message = String(error.message ?? "");
+  const known = [
+    "Seats can change only before a hand is dealt",
+    "That seating does not match the players here",
+    "Give all four seats",
+  ].find((item) => message.includes(item));
+  throw new HttpError(known ? 400 : 500, known ?? "Could not change the seating. Try again.");
+}
+
+export async function handleTable(req: Request): Promise<Response> {
+  const userId = await requireUser(req);
+  const body = await readBody(req);
+  const admin = adminClient();
+  const action = String(body.action ?? "state");
+
+  if (action === "create") {
+    const name = cleanName(body.name);
+    const settings = cleanSettings(body.settings);
+    let table: Row | null = null;
+    for (let attempt = 0; attempt < 5 && !table; attempt++) {
+      const { data, error } = await admin
+        .from("game_tables")
+        .insert({
+          code: roomCode(),
+          host_id: userId,
+          settings,
+          season: settings.season,
+          round_number: settings.firstRoundNumber,
+        })
+        .select("*")
+        .single();
+      if (!error) table = data;
+      else if (String(error.code) !== "23505") throw new HttpError(500, error.message);
+    }
+    if (!table) throw new HttpError(500, "Could not make a room code");
+    const { error } = await admin.from("seats").insert({
+      table_id: table.id,
+      seat_index: 0,
+      user_id: userId,
+      display_name: name,
+    });
+    if (error) throw new HttpError(500, error.message);
+    return json({ view: await buildView(admin, table.id, userId) });
+  }
+
+  if (action === "join") {
+    const name = cleanName(body.name);
+    const code = String(body.code ?? "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) throw new HttpError(400, "Enter the 6-character code");
+    const { data: table, error } = await admin.from("game_tables").select("*").eq("code", code).maybeSingle();
+    if (error) throw new HttpError(500, error.message);
+    if (!table) throw new HttpError(404, "No table uses that code");
+    const seats = await loadSeats(admin, table.id);
+    const mine = seats.find((seat) => seat.user_id === userId);
+    if (mine && table.status === "lobby" && mine.display_name !== name) {
+      const { error: renameError } = await admin
+        .from("seats")
+        .update({ display_name: name })
+        .eq("table_id", table.id)
+        .eq("user_id", userId);
+      if (renameError) throw new HttpError(500, renameError.message);
+    }
+    if (!mine) {
+      if (table.status !== "lobby") throw new HttpError(400, "That table has already started");
+      if (seats.length >= 4) throw new HttpError(400, "That table is full");
+      const taken = new Set(seats.map((seat) => seat.seat_index));
+      const seatIndex = [0, 1, 2, 3].find((index) => !taken.has(index));
+      const { error: insertError } = await admin.from("seats").insert({
+        table_id: table.id,
+        seat_index: seatIndex,
+        user_id: userId,
+        display_name: name,
+      });
+      if (insertError) throw new HttpError(400, "That seat was just taken. Try again.");
+    }
+    return json({ view: await buildView(admin, table.id, userId) });
+  }
+
+  const tableId = String(body.tableId ?? "");
+  if (!/^[0-9a-f-]{36}$/i.test(tableId)) throw new HttpError(400, "Missing table");
+
+  if (action === "state" || action === "heartbeat") {
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
+  if (action === "settings") {
+    const table = await loadTable(admin, tableId);
+    if (table.host_id !== userId) throw new HttpError(403, "Only the host can change settings");
+    if (table.status !== "lobby") throw new HttpError(400, "Settings can change before the first hand");
+    const settings = cleanSettings(body.settings, settingsOf(table));
+    const existing = await latestHand(admin, tableId);
+    if (existing) throw new HttpError(400, "Settings can change before the first hand");
+    const { error } = await admin
+      .from("game_tables")
+      .update({
+        settings,
+        season: settings.season,
+        ...(existing ? {} : { round_number: settings.firstRoundNumber }),
+      })
+      .eq("id", tableId);
+    if (error) throw new HttpError(500, error.message);
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
+  if (action === "shuffle" || action === "order") {
+    const table = await loadTable(admin, tableId);
+    const seats = await loadSeats(admin, tableId);
+    requireSeat(seats, userId);
+    if (table.host_id !== userId) throw new HttpError(403, "Only the host can change the seating");
+    if (table.status !== "lobby") throw new HttpError(400, "Seats can change only before a hand is dealt");
+    const order = action === "shuffle" ? shuffledSeatOrder(seats) : seatOrder(seats, body.order);
+    await writeSeatOrder(admin, table.id, order);
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
+  if (action === "rename") {
+    const table = await loadTable(admin, tableId);
+    const seats = await loadSeats(admin, tableId);
+    requireSeat(seats, userId);
+    if (table.host_id !== userId) throw new HttpError(403, "Only the host can change names");
+    if (table.status !== "lobby") throw new HttpError(400, "Names can change before the next hand");
+    const seatIndex = Number(body.seat);
+    if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex > 3) throw new HttpError(400, "Choose a seat");
+    const name = cleanName(body.name);
+    const { data, error } = await admin
+      .from("seats")
+      .update({ display_name: name })
+      .eq("table_id", tableId)
+      .eq("seat_index", seatIndex)
+      .select("user_id");
+    if (error) throw new HttpError(500, error.message);
+    if (!data || data.length === 0) throw new HttpError(400, "That seat is empty");
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
+  if (action === "new_round") {
+    const table = await loadTable(admin, tableId);
+    const seats = await loadSeats(admin, tableId);
+    requireSeat(seats, userId);
+    if (table.status !== "round_end") throw new HttpError(400, "This round is still going");
+    const nextRound = table.round_number + 1;
+    const { data, error } = await admin
+      .from("game_tables")
+      .update({ status: "lobby", round_number: nextRound })
+      .eq("id", tableId)
+      .eq("status", "round_end")
+      .select("id");
+    if (error) throw new HttpError(500, error.message);
+    if (!data || data.length === 0) throw new HttpError(409, "The table changed. Try that again.");
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
+  throw new HttpError(400, "Unknown action");
+}
+
+export async function handleDeal(req: Request): Promise<Response> {
+  const userId = await requireUser(req);
+  const body = await readBody(req);
+  const tableId = String(body.tableId ?? "");
+  const admin = adminClient();
+  const table = await loadTable(admin, tableId);
+  const seats = await loadSeats(admin, tableId);
+  await dealHand(admin, table, seats, userId);
+  return json({ view: await buildView(admin, tableId, userId) });
+}
+
+export async function handlePlay(req: Request): Promise<Response> {
+  const userId = await requireUser(req);
+  const body = await readBody(req);
+  const cards = Array.isArray(body.cards) ? body.cards.map((card) => String(card)) : [];
+  const admin = adminClient();
+  const tableId = String(body.tableId ?? "");
+  await act(admin, tableId, userId, "play", cards);
+  return json({ view: await buildView(admin, tableId, userId) });
+}
+
+export async function handlePass(req: Request): Promise<Response> {
+  const userId = await requireUser(req);
+  const body = await readBody(req);
+  const admin = adminClient();
+  const tableId = String(body.tableId ?? "");
+  await act(admin, tableId, userId, "pass", []);
+  return json({ view: await buildView(admin, tableId, userId) });
+}
+
+export async function handleTick(req: Request): Promise<Response> {
+  const userId = await requireUser(req);
+  const body = await readBody(req);
+  const tableId = String(body.tableId ?? "");
+  const admin = adminClient();
+  const table = await loadTable(admin, tableId);
+  let hand = await latestHand(admin, tableId);
+  const settings = settingsOf(table);
+  if (hand?.status === "playing") {
+    const played = await replayHand(admin, hand, settings);
+    if (played.step.state.status === "complete") {
+      const seats = await loadSeats(admin, tableId);
+      await saveProjection(admin, table, hand, seats, played.step, played.deckText);
+      hand = await latestHand(admin, tableId);
+    }
+  }
+  if (hand?.status === "playing" && settings.turnTimerSeconds > 0) {
+    const elapsed = Date.now() - new Date(hand.turn_started_at).getTime();
+    if (elapsed >= settings.turnTimerSeconds * 1000) {
+      await act(admin, tableId, userId, "timeout", []);
+      hand = await latestHand(admin, tableId);
+    }
+  }
+  if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
+    await sendWebhook(admin, hand.id);
+  }
+  return json({ view: await buildView(admin, tableId, userId) });
+}
+
+export async function handlePing(): Promise<Response> {
+  const admin = adminClient();
+  const { error } = await admin.from("keep_alive").upsert({ id: 1, pinged_at: new Date().toISOString() });
+  if (error) throw new HttpError(500, error.message);
+  return json({ ok: true, at: new Date().toISOString() });
+}
