@@ -14,6 +14,7 @@ import {
 } from "./rules/game.ts";
 import { commitDeck, cryptoUint32, shuffleDeck, shuffleInPlace } from "./rules/shuffle.ts";
 import { formatDate, webhookPayload, type WebhookPayload } from "./rules/score.ts";
+import { recentActions, type RecentEvent } from "./recent.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -187,7 +188,7 @@ async function replayHand(admin: SupabaseClient, hand: Row, settings: Settings) 
   const { data: secret, error } = await admin.from("hand_secrets").select("deck").eq("hand_id", hand.id).single();
   if (error) throw new HttpError(500, error.message);
   const events = await must(
-    admin.from("events").select("seat_index, kind, payload").eq("hand_id", hand.id).order("seq"),
+    admin.from("events").select("seq, seat_index, kind, payload").eq("hand_id", hand.id).order("seq"),
   );
   const deck = parseCards(String(secret.deck).split(","));
   const log: ReplayEvent[] = (events as Row[]).map((event) => ({
@@ -197,7 +198,7 @@ async function replayHand(admin: SupabaseClient, hand: Row, settings: Settings) 
   }));
   const step = replay(deck, hand.running_at_start, hand.first_hand, hand.previous_winner, log, settings);
   if (!step.ok) throw new HttpError(500, step.message);
-  return { step, eventCount: log.length, deckText: String(secret.deck) };
+  return { step, eventCount: log.length, deckText: String(secret.deck), events: events as Row[] };
 }
 
 function connected(seat: Row): boolean {
@@ -307,6 +308,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
       result: null,
       turnStartedAt: null,
       roundOver: false,
+      recent: [] as RecentEvent[],
     };
   }
 
@@ -328,13 +330,27 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
       result: null,
       turnStartedAt: null,
       roundOver: false,
+      recent: [] as RecentEvent[],
     };
   }
 
-  const { step } = await replayHand(admin, hand, settings);
+  const { step, deckText, events } = await replayHand(admin, hand, settings);
   const state = step.state;
   const score = step.result;
   const names = namesOf(seats).map((name, index) => name ?? `Seat ${index + 1}`);
+  const recent = recentActions(
+    parseCards(deckText.split(",")),
+    hand.running_at_start,
+    Boolean(hand.first_hand),
+    hand.previous_winner ?? null,
+    (events as Row[]).map((event) => ({
+      seq: Number(event.seq),
+      seat: Number(event.seat_index),
+      kind: String(event.kind),
+      cards: Array.isArray(event.payload?.cards) ? event.payload.cards.map((card: unknown) => String(card)) : [],
+    })),
+    settings,
+  );
   return {
     ...base,
     hand: hand.hand_number,
@@ -371,6 +387,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
       : null,
     turnStartedAt: hand.turn_started_at,
     roundOver: Boolean(hand.round_over),
+    recent,
   };
 }
 

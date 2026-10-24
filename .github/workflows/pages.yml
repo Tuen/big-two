@@ -33,7 +33,7 @@ jobs:
 
       - name: Test the TypeScript rules
         working-directory: rules
-        run: node --experimental-strip-types --test --test-concurrency=1 test/rules.test.ts test/bots.test.ts
+        run: node --experimental-strip-types --test --test-concurrency=1 test/rules.test.ts test/bots.test.ts test/recent.test.ts
 
       - name: Test the Flutter app
         working-directory: app
@@ -68,9 +68,14 @@ jobs:
 
       - name: Replace the site
         run: |
-          find site -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          # site/test belongs to the test preview. Do not delete it.
+          find site -mindepth 1 -maxdepth 1 ! -name .git ! -name test -exec rm -rf {} +
           cp -a app/build/web/. site/
           rm -rf site/canvaskit
+          if [ -e app/build/web/test ]; then
+            echo "The live build contains a test folder and would replace the preview."
+            exit 1
+          fi
           touch site/.nojekyll
 
       - name: Publish

@@ -22,7 +22,8 @@ The house rules are in [RULES.md](RULES.md).
 | `supabase/functions/` | `table`, `deal`, `play`, `pass`, `tick`, `ping`, and `home`. |
 | `supabase/migrations/` | `001_init.sql` tables and row-level security, `002_reorder_seats.sql` seating, `003_webhook_log.sql` score delivery. |
 | `rules/test/rules.test.ts` | Node tests for the TypeScript rules. |
-| `.github/workflows/pages.yml` | Builds the web app from source and publishes `gh-pages`. |
+| `.github/workflows/pages.yml` | Builds the web app from source and publishes `gh-pages`, leaving the `test/` folder in place. |
+| `.github/workflows/test-preview.yml` | Builds `v1.1-dev` into `gh-pages/test/` only. |
 | `.github/workflows/keep-awake.yml` | Pings Supabase on Sunday and Wednesday. |
 
 The Dart and TypeScript engines are two copies. If you change a rule, change both, then run both test suites.
@@ -94,9 +95,11 @@ The app subscribes to hands and seats, then asks `tick` for a fresh view. That v
 
 ## GitHub Pages
 
-A push to `main` runs **Publish the web app** (`.github/workflows/pages.yml`). It checks out the source, runs the tests, builds with `flutter build web --release --base-href /big-two/ --dart-define-from-file=public-client.json`, and commits the result to `gh-pages` when the site changed. It does not force-push. The public anon key and project URL in `app/public-client.json` are meant to be public. Do not add a service-role key or a webhook key to that file or to the workflow.
+A push to `main` runs **Publish the web app** (`.github/workflows/pages.yml`). It checks out the source, runs the tests, builds with `flutter build web --release --base-href /big-two/ --dart-define-from-file=public-client.json`, and commits the result to `gh-pages` when the site changed. It does not force-push, and it does not delete the `test/` folder. The public anon key and project URL in `app/public-client.json` are meant to be public. Do not add a service-role key or a webhook key to that file or to the workflow.
 
 `gh-pages` is what [https://tuen.github.io/big-two/](https://tuen.github.io/big-two/) serves. `main` holds the source.
+
+A push to `v1.1-dev` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish.
 
 On an iPhone or iPad: open the site in Safari, Share, **Add to Home Screen**, then launch **Big Two** from the icon.
 
