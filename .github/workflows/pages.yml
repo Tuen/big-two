@@ -1,4 +1,4 @@
-name: Deploy Big Two
+name: Publish the web app
 
 on:
   push:
@@ -7,56 +7,81 @@ on:
 
 permissions:
   contents: write
-  pages: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout the published branch
+      - name: Check out the source
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.7"
+          channel: stable
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test the TypeScript rules
+        working-directory: rules
+        run: node --experimental-strip-types --test test/rules.test.ts
+
+      - name: Test the Flutter app
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter test
+
+      - name: Decode web icons
+        working-directory: app
+        run: |
+          python3 - <<'PY'
+          import base64, pathlib
+          found = list(pathlib.Path("web").rglob("*.png.b64"))
+          if not found:
+              raise SystemExit("no web icons to decode")
+          for src in found:
+              dest = src.with_suffix("")
+              dest.write_bytes(base64.b64decode(src.read_text().strip()))
+              src.unlink()
+              print(dest.as_posix(), dest.stat().st_size)
+          PY
+
+      - name: Build the web app
+        working-directory: app
+        run: flutter build web --release --base-href /big-two/ --dart-define-from-file=public-client.json
+
+      - name: Check out gh-pages
         uses: actions/checkout@v4
         with:
           ref: gh-pages
+          path: site
 
-      - name: Assemble the playable files
-        shell: bash
+      - name: Replace the site
         run: |
-          set -euo pipefail
-          rm -f probe-*.txt
-          while IFS= read -r -d '' f; do
-            out="${f%.b64}"
-            mkdir -p "$(dirname "$out")"
-            base64 -d "$f" > "$out"
-            rm -f "$f"
-          done < <(find . -path ./.git -prune -o -name '*.b64' -print0)
-          if ls main.dart.js.part* >/dev/null 2>&1; then
-            cat $(ls main.dart.js.part* | sort) > main.dart.js
-            rm -f main.dart.js.part*
-          fi
-          if ls assets/NOTICES.part* >/dev/null 2>&1; then
-            cat $(ls assets/NOTICES.part* | sort) > assets/NOTICES
-            rm -f assets/NOTICES.part*
-          fi
-          test -s main.dart.js
-          test -s favicon.png
-          test -s assets/fonts/MaterialIcons-Regular.otf
+          find site -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a app/build/web/. site/
+          rm -rf site/canvaskit
+          touch site/.nojekyll
+
+      - name: Publish
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "Site is already assembled."
+            echo "Site is already current"
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -m "Assemble the playable site"
+            git commit -m "Publish the web app"
             git push origin HEAD:gh-pages
           fi
-
-      - name: Request a Pages build
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method POST "repos/${{ github.repository }}/pages/builds"
