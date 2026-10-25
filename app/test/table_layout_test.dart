@@ -72,6 +72,30 @@ void main() {
       expect(find.text("▶ Turn"), findsWidgets);
       expect(find.text("Pass"), findsWidgets);
       expect(find.text("Your turn"), findsOneWidget);
+      final play = tester.getRect(find.byKey(const Key("play-button")));
+      final undo = tester.getRect(find.byKey(const Key("undo-button")));
+      final pass = tester.getRect(find.byKey(const Key("pass-button")));
+      expect(play.height, greaterThanOrEqualTo(48));
+      expect(undo.height, greaterThanOrEqualTo(48));
+      expect(pass.height, greaterThanOrEqualTo(48));
+      final landscapePhone = size.width > size.height && size.height < 500;
+      if (landscapePhone) {
+        expect((play.center.dy - pass.center.dy).abs(), lessThan(4));
+        expect((play.center.dy - undo.center.dy).abs(), lessThan(4));
+        final boxes = [pass, undo, play]..sort((a, b) => a.left.compareTo(b.left));
+        expect(boxes[1].left - boxes[0].right, greaterThanOrEqualTo(8));
+        expect(boxes[2].left - boxes[1].right, greaterThanOrEqualTo(8));
+        expect(play.width, greaterThanOrEqualTo(48));
+        final pile = tester.getRect(find.byKey(const Key("pile")));
+        final mine = tester.getRect(find.byKey(const Key("my-score")));
+        expect(play.overlaps(pile), isFalse);
+        expect(undo.overlaps(pile), isFalse);
+        expect(pass.overlaps(pile), isFalse);
+        expect(play.overlaps(mine), isFalse);
+        expect(tester.getRect(find.text("Bot Jade")).overlaps(play), isFalse);
+        expect(tester.getRect(find.text("Bot Pearl")).overlaps(play), isFalse);
+        expect(tester.getRect(find.text("Bot Ruby")).overlaps(play), isFalse);
+      }
     });
   }
 }

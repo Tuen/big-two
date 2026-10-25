@@ -268,7 +268,7 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Row(
             children: [
-              Expanded(child: _actionButton(widget.passLabel, filled: false, onPressed: widget.canPass ? widget.onPass : null)),
+              Expanded(child: _actionButton(widget.passLabel, filled: false, onPressed: widget.canPass ? widget.onPass : null, buttonKey: const Key("pass-button"))),
               const SizedBox(width: 8),
               Expanded(child: _actionButton("Undo", filled: false, onPressed: widget.canUndo ? widget.onUndo : null, buttonKey: const Key("undo-button"))),
               const SizedBox(width: 8),
@@ -287,18 +287,19 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
     final reasonH = widget.reason == null ? 0.0 : 18.0;
     const topH = 40.0;
     const chipH = 54.0;
-    final chrome = topH + chipH + bannerH + turnH + reasonH;
-    var pileH = (height - chrome - 128).clamp(96.0, height);
+    const actionH = 60.0;
+    final chrome = topH + chipH + bannerH + turnH + reasonH + actionH;
+    var pileH = (height - chrome - 78).clamp(90.0, height);
     var handH = height - chrome - pileH;
-    if (handH < 78) {
-      handH = 78;
+    if (handH < 72) {
+      handH = 72;
       pileH = height - chrome - handH;
-      if (pileH < 96) {
-        pileH = 96;
+      if (pileH < 90) {
+        pileH = 90;
         handH = (height - chrome - pileH).clamp(0.0, height);
       }
     }
-    final cardW = ((handH - 14) / 1.42).clamp(44.0, 92.0);
+    final cardW = ((handH - 8) / 1.42).clamp(40.0, 92.0);
     return Column(
       children: [
         SizedBox(height: topH, child: _topBar(compact: true)),
@@ -338,26 +339,30 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Expanded(child: KeyedSubtree(key: _bottomKey, child: _hand(constraints.maxWidth - 120, cardW, lift: 10))),
+              Expanded(child: KeyedSubtree(key: _bottomKey, child: _hand(constraints.maxWidth - 88, cardW, lift: 8))),
               SizedBox(
-                width: 112,
+                width: 84,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 6, bottom: 2),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      _myLine(),
-                      const SizedBox(height: 2),
-                      _smallButton(widget.passLabel, filled: false, onPressed: widget.canPass ? widget.onPass : null, height: 30),
-                      const SizedBox(height: 2),
-                      _smallButton("Undo", filled: false, onPressed: widget.canUndo ? widget.onUndo : null, buttonKey: const Key("undo-button"), height: 30),
-                      const SizedBox(height: 2),
-                      _smallButton("Play", filled: true, onPressed: widget.canPlay ? widget.onPlay : null, buttonKey: const Key("play-button"), height: 30),
-                    ],
-                  ),
+                  child: _myLine(),
                 ),
               ),
             ],
+          ),
+        ),
+        SizedBox(
+          height: actionH,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+            child: Row(
+              children: [
+                Expanded(child: _actionButton(widget.passLabel, filled: false, onPressed: widget.canPass ? widget.onPass : null, buttonKey: const Key("pass-button"))),
+                const SizedBox(width: 12),
+                Expanded(child: _actionButton("Undo", filled: false, onPressed: widget.canUndo ? widget.onUndo : null, buttonKey: const Key("undo-button"))),
+                const SizedBox(width: 12),
+                Expanded(child: _actionButton("Play", filled: true, onPressed: widget.canPlay ? widget.onPlay : null, buttonKey: const Key("play-button"))),
+              ],
+            ),
           ),
         ),
       ],
@@ -394,19 +399,6 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
       ),
     );
-  }
-
-  Widget _smallButton(String label, {required bool filled, required VoidCallback? onPressed, Key? buttonKey, double height = 40}) {
-    final style = ButtonStyle(
-      minimumSize: WidgetStatePropertyAll(Size(0, height)),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 6, vertical: 0)),
-      textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-      visualDensity: VisualDensity.compact,
-    );
-    final child = FittedBox(fit: BoxFit.scaleDown, child: Text(label));
-    if (filled) return FilledButton(key: buttonKey, style: style, onPressed: onPressed, child: child);
-    return OutlinedButton(style: style, onPressed: onPressed, child: child);
   }
 
   Widget _yourTurn({bool compact = false}) {

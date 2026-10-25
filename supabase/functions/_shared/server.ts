@@ -5,6 +5,8 @@ import {
   applyPass,
   applyPlay,
   applyTimeout,
+  automaticLastCard,
+  lastCardMessage,
   replay,
   roundWinners,
   type ReplayEvent,
@@ -240,6 +242,7 @@ async function revertMove(admin: SupabaseClient, table: Row, hand: Row, seq: num
   const replayed = await replayHand(admin, hand, settingsOf(table));
   await saveProjection(admin, table, hand, seats, replayed.step, replayed.deckText);
   await admin.from("hands").update({ last_message: MOVE_UNDONE }).eq("id", hand.id);
+  await maybeAutoLastCard(admin, table.id);
 }
 
 async function openUndo(admin: SupabaseClient, table: Row, seats: Row[], me: Row): Promise<void> {
@@ -876,6 +879,65 @@ async function dealHand(admin: SupabaseClient, table: Row, seats: Row[], userId:
   );
 }
 
+async function playHeldLastCard(
+  admin: SupabaseClient,
+  tableId: string,
+  seat: number,
+  card: string,
+): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const table = await loadTable(admin, tableId);
+  if (!rulesV13(table) || undoOf(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  if (played.step.state.turn !== seat) return;
+  if (automaticLastCard(played.step.state, seat, settingsOf(table)) !== card) return;
+  const seats = await loadSeats(admin, tableId);
+  const who = seats.find((item) => item.seat_index === seat);
+  if (!who) return;
+  await act(admin, tableId, who.user_id, "play", [card], undefined, true);
+}
+
+/** About a second after the turn starts, play a lone legal card. One completion, one score. */
+async function maybeAutoLastCard(admin: SupabaseClient, tableId: string): Promise<void> {
+  const table = await loadTable(admin, tableId);
+  if (!rulesV13(table) || undoOf(table) || held(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  const card = automaticLastCard(played.step.state, played.step.state.turn, settingsOf(table));
+  if (!card) return;
+  await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+  try {
+    await playHeldLastCard(admin, tableId, played.step.state.turn, card);
+  } catch (error) {
+    console.error(error);
+  } finally {
+    const fresh = await loadTable(admin, tableId);
+    if (fresh.settings?.hold) await setHold(admin, fresh, null);
+  }
+}
+
+async function resumeAutomaticLastCard(admin: SupabaseClient, tableId: string): Promise<void> {
+  const table = await loadTable(admin, tableId);
+  if (!rulesV13(table) || undoOf(table) || held(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const started = Date.parse(String(hand.turn_started_at ?? ""));
+  if (!Number.isFinite(started) || Date.now() - started < 1000) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  const card = automaticLastCard(played.step.state, played.step.state.turn, settingsOf(table));
+  if (!card) return;
+  const seats = await loadSeats(admin, tableId);
+  const who = seats.find((item) => item.seat_index === played.step.state.turn);
+  if (!who) return;
+  try {
+    await act(admin, tableId, who.user_id, "play", [card], undefined, true);
+  } catch (error) {
+    console.error(error);
+  }
+}
 async function act(
   admin: SupabaseClient,
   tableId: string,
@@ -883,12 +945,13 @@ async function act(
   kind: "play" | "pass" | "timeout",
   cards: string[],
   botSeat?: number,
+  autoLast = false,
 ): Promise<boolean> {
   let table = await loadTable(admin, tableId);
   await clearStaleHold(admin, table);
   await settleUndo(admin, table);
   table = await loadTable(admin, tableId);
-  if (undoOf(table) || held(table)) throw new HttpError(400, "Wait for the undo vote");
+  if (!autoLast && (undoOf(table) || held(table))) throw new HttpError(400, "Wait for the undo vote");
   const seats = await loadSeats(admin, tableId);
   const settings = settingsOf(table);
   const me = botSeat == null ? requireSeat(seats, userId) : seats.find((seat) => seat.seat_index === botSeat);
@@ -922,27 +985,46 @@ async function act(
       && rulesV13(table)
       && step.state.status === "playing"
       && isLoneTwoOfSpades(step.state.trickCards);
-    if (sweep) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+    const nextCard = !autoLast && !sweep && rulesV13(table) && step.state.status === "playing"
+      ? automaticLastCard(step.state, step.state.turn, settings)
+      : null;
+    if (sweep || nextCard) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+    let swept = false;
     try {
-      await saveProjection(admin, table, hand, seats, step, played.deckText);
-      if (!sweep) return false;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await passTheRest(admin, tableId);
-      const paused = await loadTable(admin, tableId);
-      const settings = {
-        ...paused.settings,
-        botWaitUntil: new Date(Date.now() + 2200).toISOString(),
-      };
-      delete settings.hold;
-      const { error: pauseError } = await admin.from("game_tables").update({ settings }).eq("id", tableId);
-      if (pauseError) throw new HttpError(500, pauseError.message);
-      return true;
+      const shown = autoLast ? lastCardMessage(String(me.display_name ?? "")) : step.message;
+      await saveProjection(admin, table, hand, seats, { ...step, message: shown }, played.deckText);
+      if (sweep) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await passTheRest(admin, tableId);
+        const paused = await loadTable(admin, tableId);
+        const pausedSettings = {
+          ...paused.settings,
+          botWaitUntil: new Date(Date.now() + 2200).toISOString(),
+        };
+        delete pausedSettings.hold;
+        const { error: pauseError } = await admin.from("game_tables").update({ settings: pausedSettings }).eq("id", tableId);
+        if (pauseError) throw new HttpError(500, pauseError.message);
+        swept = true;
+      }
     } finally {
       if (sweep) {
         const fresh = await loadTable(admin, tableId);
         if (fresh.settings?.hold) await setHold(admin, fresh, null);
       }
     }
+    if (nextCard) {
+      try {
+        await playHeldLastCard(admin, tableId, step.state.turn, nextCard);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        const fresh = await loadTable(admin, tableId);
+        if (fresh.settings?.hold) await setHold(admin, fresh, null);
+      }
+    } else if (swept) {
+      await maybeAutoLastCard(admin, tableId);
+    }
+    return swept;
   }
   throw new HttpError(409, "The table changed. Try that again.");
 }
@@ -1011,6 +1093,8 @@ async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
       const played = await replayHand(admin, hand, settings);
       const state = played.step.state;
       if (state.status !== "playing") return;
+      if (held(table) || undoOf(table)) return;
+      if (rulesV13(table) && automaticLastCard(state, state.turn, settings)) return;
       const seat = seats.find((item) => item.seat_index === state.turn);
       if (!seat?.is_bot) return;
 
@@ -1357,6 +1441,8 @@ export async function handleTick(req: Request): Promise<Response> {
     }
     return json({ view: await buildView(admin, tableId, userId) });
   }
+  await resumeAutomaticLastCard(admin, tableId);
+  hand = await latestHand(admin, tableId);
   if (hand?.status === "playing") {
     const played = await replayHand(admin, hand, settings);
     if (played.step.state.status === "complete") {

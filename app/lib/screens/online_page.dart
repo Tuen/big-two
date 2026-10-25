@@ -772,10 +772,11 @@ class _OnlinePageState extends State<OnlinePage> {
     final voting = view.undo != null;
     final paused = voting || view.holding;
     final shared = _everyoneSees(view.message);
+    final lastCardWait = paused && mine && !voting && view.yourCards.length == 1;
     final waiting = mine || shared
         ? view.message
         : "Waiting for ${view.seats[view.turn ?? view.you].name ?? "the next player"}";
-    final voteNote = voting ? "Waiting for the undo vote" : null;
+    final voteNote = voting ? "Waiting for the undo vote" : (lastCardWait ? "Playing your last card…" : null);
     final left = _remaining(view);
     final shownTurn = _dwelling && _actor != null ? _actor : view.turn;
     final counts = countsHolding(view.counts, _reel.queue);
@@ -842,7 +843,8 @@ class _OnlinePageState extends State<OnlinePage> {
     return message == "Undo rejected" ||
         message == "Move undone" ||
         message == "2♠ – everyone passes" ||
-        message.endsWith("wants to undo their last move");
+        message.endsWith("wants to undo their last move") ||
+        message.endsWith("plays their last card");
   }
 
   int? _remaining(TableSnapshot view) {
@@ -879,6 +881,10 @@ class _OnlinePageState extends State<OnlinePage> {
         padding: const EdgeInsets.all(20),
         children: [
           WinnerPulse(text: winner),
+          if (view.message.endsWith("plays their last card")) ...[
+            const SizedBox(height: 8),
+            Text(view.message, textAlign: TextAlign.center, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+          ],
           const SizedBox(height: 12),
           if (result != null)
             for (var seat = 0; seat < 4; seat++)

@@ -528,4 +528,44 @@ void main() {
     expect(applyPlay(state, 0, ["7C"], settings), isA<StepOk>());
     expect(applyPass(state, 0, settings), isA<StepOk>());
   });
+
+  test("a lone legal card is played automatically, and an illegal one is not", () {
+    final others = [parseCards(["9C", "4C"]), parseCards(["6H", "7H"]), parseCards(["8D", "TD"])];
+    final lead = makeState(hands: [parseCards(["5D"]), ...others], turn: 0);
+    expect(automaticLastCard(lead, 0, settings), "5D");
+    expect(lastCardMessage("Ada"), "Ada plays their last card");
+
+    final two = makeState(hands: [parseCards(["2H"]), ...others], turn: 0);
+    expect(automaticLastCard(two, 0, settings), isNull);
+
+    final low = makeState(
+      hands: [parseCards(["3D"]), ...others],
+      turn: 0,
+      trick: mustCombo(["KD"]),
+      trickSeat: 1,
+      trickCards: ["KD"],
+    );
+    expect(automaticLastCard(low, 0, settings), isNull);
+
+    final againstPair = makeState(
+      hands: [parseCards(["KD"]), ...others],
+      turn: 0,
+      trick: mustCombo(["4C", "4D"]),
+      trickSeat: 1,
+      trickCards: ["4C", "4D"],
+    );
+    expect(automaticLastCard(againstPair, 0, settings), isNull);
+
+    final beat = makeState(
+      hands: [parseCards(["AS"]), ...others],
+      turn: 0,
+      trick: mustCombo(["5D"]),
+      trickSeat: 1,
+      trickCards: ["5D"],
+    );
+    expect(automaticLastCard(beat, 0, settings), "AS");
+    final won = applyPlay(beat, 0, ["AS"], settings) as StepOk;
+    expect(won.state.status, "complete");
+    expect(won.state.winner, 0);
+  });
 }

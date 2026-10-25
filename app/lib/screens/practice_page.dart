@@ -64,6 +64,8 @@ class _PracticePageState extends State<PracticePage> {
   bool _sweeping = false;
   Timer? _sweep;
   int _sweepGen = 0;
+  Timer? _lastCard;
+  int _lastCardGen = 0;
 
   @override
   void initState() {
@@ -80,6 +82,7 @@ class _PracticePageState extends State<PracticePage> {
   void dispose() {
     _ticker?.cancel();
     _sweep?.cancel();
+    _lastCard?.cancel();
     for (final controller in _nameControllers) {
       controller.dispose();
     }
@@ -236,6 +239,7 @@ class _PracticePageState extends State<PracticePage> {
     TableSounds.instance.unlock();
     TableSounds.instance.yourTurn();
     _armTimer();
+    _armLastCard();
   }
 
   void _armTimer() {
@@ -270,6 +274,7 @@ class _PracticePageState extends State<PracticePage> {
     if (snap == null) return;
     _sweepGen += 1;
     _sweep?.cancel();
+    _lastCard?.cancel();
     _ticker?.cancel();
     setState(() {
       _state = snap.state;
@@ -288,6 +293,7 @@ class _PracticePageState extends State<PracticePage> {
       _secondsLeft = null;
     });
     _armTimer();
+    _armLastCard();
   }
 
   void _beginSweep(StepOk ok) {
@@ -303,6 +309,7 @@ class _PracticePageState extends State<PracticePage> {
       _secondsLeft = null;
     });
     _sweep?.cancel();
+    _lastCard?.cancel();
     _sweep = Timer(const Duration(seconds: 1), () {
       if (!mounted || gen != _sweepGen) return;
       _finishSweep();
@@ -339,6 +346,32 @@ class _PracticePageState extends State<PracticePage> {
     });
     _armPasses();
     _armTimer();
+    _armLastCard();
+  }
+
+  void _armLastCard() {
+    _lastCard?.cancel();
+    final state = _state;
+    final gen = ++_lastCardGen;
+    if (state == null || state.status != "playing" || _cover || _sweeping) return;
+    final card = automaticLastCard(state, state.turn, _settings);
+    if (card == null) return;
+    _lastCard = Timer(const Duration(seconds: 1), () {
+      if (!mounted || gen != _lastCardGen) return;
+      _playLastCard(card);
+    });
+  }
+
+  void _playLastCard(String card) {
+    final state = _state;
+    if (state == null || _cover || _sweeping || state.status != "playing") return;
+    if (automaticLastCard(state, state.turn, _settings) != card) return;
+    final step = applyPlay(state, state.turn, [card], _settings);
+    if (step is! StepOk || step.state.status != "complete") return;
+    _undo = null;
+    _remember(state.turn, "play", [card], _comboLabel([card]));
+    TableSounds.instance.playCard();
+    _apply(StepOk(step.state, step.result, lastCardMessage(_names[state.turn])));
   }
 
   void _apply(Step step) {
@@ -425,6 +458,8 @@ class _PracticePageState extends State<PracticePage> {
   void _playSelected() {
     final state = _state;
     if (state == null || _sweeping) return;
+    _lastCard?.cancel();
+    _lastCardGen += 1;
     final cards = _selected.toList();
     final step = applyPlay(state, state.turn, cards, _settings);
     if (step is StepOk) {
@@ -447,6 +482,8 @@ class _PracticePageState extends State<PracticePage> {
   void _passTurn() {
     final state = _state;
     if (state == null || _sweeping) return;
+    _lastCard?.cancel();
+    _lastCardGen += 1;
     final step = applyPass(state, state.turn, _settings);
     if (step is StepOk) {
       if (step.state.status == "complete") {

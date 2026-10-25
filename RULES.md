@@ -65,6 +65,8 @@ Straight flushes rank by suit. Any spade straight flush beats any heart one, any
 
 The hand ends as soon as one player plays their last card.
 
+If it is your turn and you have exactly one card left, and that card is a legal play, the game plays it for you about a second after your turn starts. You are leading, or it beats the single on the table. Everyone sees "<name> plays their last card". That play wins the hand, so it cannot be undone. If the card cannot legally be played — it does not beat what is on the table, or it is a 2 on its own — nothing is played for you, and you pass as usual. Computer players do the same.
+
 You cannot go out on 2s alone. One, two, or three 2s are refused when that play would empty your hand. Four 2s are not a legal combination, so they cannot empty the hand either. Playing a 2, a pair of 2s, or a triple of 2s is legal while other cards remain. A five-card hand may contain a 2 and may be the last play, including four 2s plus one other card.
 
 If the person who must lead has no legal play, the lead passes clockwise. That happens when their only cards are one 2 or a pair of 2s. The button says **Pass lead**. Three 2s can still lead a single or a pair and keep the rest. If all four players are skipped on an empty trick, the hand ends with no winner (`stuck`). Everyone is scored on the cards they still hold. The next hand is led by whoever holds the 3 of diamonds, the same as a first hand.

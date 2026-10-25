@@ -287,6 +287,20 @@ String? oneCardNote(HandState state, int seat, Settings settings) {
   return highestSingleNote;
 }
 
+String lastCardMessage(String name) {
+  final who = name.trim().isEmpty ? "Someone" : name.trim();
+  return "$who plays their last card";
+}
+
+/// The one card to play on its own, when this seat has a single legal card left.
+String? automaticLastCard(HandState state, int seat, Settings settings) {
+  if (state.status != "playing" || state.turn != seat) return null;
+  final hand = state.hands[seat];
+  if (hand.length != 1) return null;
+  if (playIssue(state, seat, hand, settings) != null) return null;
+  return formatCard(hand.first);
+}
+
 String? passIssue(HandState state, int seat, Settings settings) {
   if (state.status != "playing") return "This hand is over";
   if (seat != state.turn) return "Not your turn";

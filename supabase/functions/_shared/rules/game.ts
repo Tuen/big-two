@@ -271,6 +271,20 @@ export function oneCardNote(state: HandState, seat: number, settings: Settings):
   return HIGHEST_SINGLE_NOTE;
 }
 
+export function lastCardMessage(name: string): string {
+  const who = name.trim() || "Someone";
+  return `${who} plays their last card`;
+}
+
+/** The one card to play on its own, when this seat has a single legal card left. */
+export function automaticLastCard(state: HandState, seat: number, settings: Settings): string | null {
+  if (state.status !== "playing" || state.turn !== seat) return null;
+  const hand = state.hands[seat];
+  if (!hand || hand.length !== 1) return null;
+  if (playIssue(state, seat, hand, settings) !== null) return null;
+  return formatCard(hand[0]);
+}
+
 /** Null when a pass is legal. */
 export function passIssue(state: HandState, seat: number, settings: Settings): string | null {
   if (state.status !== "playing") return "This hand is over";

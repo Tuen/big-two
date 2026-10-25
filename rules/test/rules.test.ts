@@ -6,7 +6,9 @@ import {
   applyPass,
   applyPlay,
   applyTimeout,
+  automaticLastCard,
   HIGHEST_SINGLE_MESSAGE,
+  lastCardMessage,
   MUST_PLAY_HIGHEST_MESSAGE,
   lowestLegalPlay,
   makeState,
@@ -721,5 +723,51 @@ test("a normal single is not forced when the next player has more than one card"
   });
   assert.equal(applyPlay(state, 0, ["7C"], settings).ok, true);
   assert.equal(applyPass(state, 0, settings).ok, true);
+});
+
+test("a lone legal card is played automatically, and an illegal one is not", () => {
+  const others = [parseCards(["9C", "4C"]), parseCards(["6H", "7H"]), parseCards(["8D", "TD"])];
+  const lead = makeState({ hands: [parseCards(["5D"]), ...others], turn: 0, firstLead: false });
+  assert.equal(automaticLastCard(lead, 0, settings), "5D");
+  assert.equal(lastCardMessage("Ada"), "Ada plays their last card");
+
+  const two = makeState({ hands: [parseCards(["2H"]), ...others], turn: 0, firstLead: false });
+  assert.equal(automaticLastCard(two, 0, settings), null);
+
+  const low = makeState({
+    hands: [parseCards(["3D"]), ...others],
+    turn: 0,
+    firstLead: false,
+    trick: singleTrick("KD"),
+    trickSeat: 1,
+    trickCards: ["KD"],
+  });
+  assert.equal(automaticLastCard(low, 0, settings), null);
+
+  const againstPair = makeState({
+    hands: [parseCards(["KD"]), ...others],
+    turn: 0,
+    firstLead: false,
+    trick: identify(parseCards(["4C", "4D"])),
+    trickSeat: 1,
+    trickCards: ["4C", "4D"],
+  });
+  assert.equal(automaticLastCard(againstPair, 0, settings), null);
+
+  const beat = makeState({
+    hands: [parseCards(["AS"]), ...others],
+    turn: 0,
+    firstLead: false,
+    trick: singleTrick("5D"),
+    trickSeat: 1,
+    trickCards: ["5D"],
+  });
+  assert.equal(automaticLastCard(beat, 0, settings), "AS");
+  const won = applyPlay(beat, 0, ["AS"], settings);
+  assert.equal(won.ok, true);
+  if (won.ok) {
+    assert.equal(won.state.status, "complete");
+    assert.equal(won.state.winner, 0);
+  }
 });
 
