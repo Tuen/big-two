@@ -70,6 +70,19 @@ export const HIGHEST_SINGLE_MESSAGE =
 export const HIGHEST_SINGLE_NOTE =
   "Next player is on one card: singles must be your highest card";
 
+/** Following a non-2 single, when the highest card can legally beat it. */
+export const MUST_PLAY_HIGHEST_MESSAGE =
+  "Next player has one card left: you must play your highest card.";
+
+export const MUST_PLAY_HIGHEST_NOTE =
+  "Next player is on one card: you must play your highest card";
+
+export const TWO_ON_TABLE_NOTE =
+  "A 2 is on the table: you may pass, or play your highest card";
+
+export const CANNOT_BEAT_NOTE =
+  "Your highest card can't beat this single. You may pass.";
+
 export function nextSeat(seat: number): number {
   return (seat + 1) % 4;
 }
@@ -236,6 +249,39 @@ export function playIssue(
   return null;
 }
 
+/** The next player has one card, the trick is a non-2 single, and our highest card is a legal answer. */
+export function mustPlayHighestSingle(state: HandState, seat: number, settings: Settings): boolean {
+  if (state.hands[nextSeat(seat)]?.length !== 1) return false;
+  const trick = state.trick;
+  if (!trick || family(trick.kind) !== "single" || trick.cards.length === 0 || trick.cards[0].r === 15) return false;
+  const highest = highestCard(state.hands[seat]);
+  if (!highest) return false;
+  return playIssue(state, seat, [highest], settings) === null;
+}
+
+export function oneCardNote(state: HandState, seat: number, settings: Settings): string | null {
+  if (state.hands[nextSeat(seat)]?.length !== 1) return null;
+  if (mustPlayHighestSingle(state, seat, settings)) return MUST_PLAY_HIGHEST_NOTE;
+  const trick = state.trick;
+  if (trick && family(trick.kind) === "single" && trick.cards[0]?.r === 15) return TWO_ON_TABLE_NOTE;
+  if (trick && family(trick.kind) === "single") {
+    const highest = highestCard(state.hands[seat]);
+    if (!highest || playIssue(state, seat, [highest], settings) !== null) return CANNOT_BEAT_NOTE;
+  }
+  return HIGHEST_SINGLE_NOTE;
+}
+
+/** Null when a pass is legal. */
+export function passIssue(state: HandState, seat: number, settings: Settings): string | null {
+  if (state.status !== "playing") return "This hand is over";
+  if (seat !== state.turn) return "Not your turn";
+  if (mustPlayHighestSingle(state, seat, settings)) return MUST_PLAY_HIGHEST_MESSAGE;
+  if (state.trick === null && legalSelections(state, seat, settings).length > 0) {
+    return "You must lead — passing isn't allowed";
+  }
+  return null;
+}
+
 export function legalSelections(state: HandState, seat: number, settings: Settings): Card[][] {
   if (state.status !== "playing" || seat !== state.turn || state.locked.includes(seat)) return [];
   return subsets(state.hands[seat]).filter((cards) => playIssue(state, seat, cards, settings) === null);
@@ -297,13 +343,15 @@ export function applyPlay(state: HandState, seat: number, cardIds: readonly stri
 }
 
 export function applyPass(state: HandState, seat: number, settings: Settings): Step {
-  if (state.status !== "playing") return fail("over", "This hand is over");
-  if (seat !== state.turn) return fail("turn", "Not your turn");
+  const issue = passIssue(state, seat, settings);
+  if (issue) {
+    if (issue === MUST_PLAY_HIGHEST_MESSAGE) return fail("must_play", issue);
+    if (state.status !== "playing") return fail("over", issue);
+    if (seat !== state.turn) return fail("turn", issue);
+    return fail("must_lead", issue);
+  }
 
   if (state.trick === null) {
-    if (legalSelections(state, seat, settings).length > 0) {
-      return fail("must_lead", "You must lead — passing isn't allowed");
-    }
     const skips = state.leadSkips + 1;
     if (skips >= 4) {
       const done = complete({ ...cloneState(state), leadSkips: skips }, null, "stuck");
@@ -361,9 +409,13 @@ export function lowestLegalPlay(state: HandState, seat: number, settings: Settin
   return best.map(formatCard);
 }
 
-/** Disconnected-player timer. Followers pass. A leader plays their lowest single. */
+/** Disconnected-player timer. Followers pass, unless the one-card rule forces the highest card. */
 export function applyTimeout(state: HandState, settings: Settings): Step {
   const seat = state.turn;
+  if (mustPlayHighestSingle(state, seat, settings)) {
+    const highest = highestCard(state.hands[seat]);
+    if (highest) return applyPlay(state, seat, [formatCard(highest)], settings);
+  }
   if (state.trick === null) {
     const cards = lowestLegalPlay(state, seat, settings);
     if (!cards) return applyPass(state, seat, settings);

@@ -1,6 +1,6 @@
-import { type Card, formatCard, fullDeck, SUITS } from "../rules/cards.ts";
+import { type Card, formatCard, fullDeck, highestCard, SUITS } from "../rules/cards.ts";
 import { beats, type Combo, compareKey, family, identify } from "../rules/combo.ts";
-import { makeState, playIssue, type Settings } from "../rules/game.ts";
+import { makeState, mustPlayHighestSingle, playIssue, type HandState, type Settings } from "../rules/game.ts";
 
 /**
  * Computer-player choice. Callers pass one seat's own cards, the cards already
@@ -35,6 +35,11 @@ interface Plan {
 }
 
 export function chooseMove(view: BotView): BotMove {
+  const state = botState(view);
+  if (mustPlayHighestSingle(state, view.seat, view.settings)) {
+    const highest = highestCard(view.hand);
+    if (highest) return played([highest]);
+  }
   const wrap = view.settings.straightsWrap;
   const legal = legalPlays(view);
   if (legal.length === 0) return { kind: "pass" };
@@ -64,21 +69,7 @@ function played(cards: readonly Card[]): BotMove {
 }
 
 function legalPlays(view: BotView): Card[][] {
-  const hands: Card[][] = [0, 1, 2, 3].map((seat) => {
-    if (seat === view.seat) return view.hand.map((card) => ({ ...card }));
-    const count = view.counts[seat] ?? 0;
-    // Other hands stay hidden. Only the count matters, for the one-card single rule.
-    return Array.from({ length: count }, () => ({ r: 3, s: "D" as const }));
-  });
-  const state = makeState({
-    hands,
-    turn: view.seat,
-    trick: view.trick,
-    trickSeat: view.trickSeat,
-    firstLead: view.firstLead,
-    locked: [...(view.locked ?? [])],
-    running: [...view.running],
-  });
+  const state = botState(view);
   const seen = new Set<string>();
   const found: Card[][] = [];
   for (const cards of candidates(view.hand)) {
@@ -89,6 +80,24 @@ function legalPlays(view: BotView): Card[][] {
     found.push(cards);
   }
   return found;
+}
+
+function botState(view: BotView): HandState {
+  const hands: Card[][] = [0, 1, 2, 3].map((seat) => {
+    if (seat === view.seat) return view.hand.map((card) => ({ ...card }));
+    const count = view.counts[seat] ?? 0;
+    // Other hands stay hidden. Only the count matters, for the one-card single rule.
+    return Array.from({ length: count }, () => ({ r: 3, s: "D" as const }));
+  });
+  return makeState({
+    hands,
+    turn: view.seat,
+    trick: view.trick,
+    trickSeat: view.trickSeat,
+    firstLead: view.firstLead,
+    locked: [...(view.locked ?? [])],
+    running: [...view.running],
+  });
 }
 
 function candidates(hand: readonly Card[]): Card[][] {

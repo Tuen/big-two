@@ -441,6 +441,91 @@ void main() {
     final beatsButLow = applyPlay(following, 0, ["6C"], settings) as StepBad;
     expect(beatsButLow.message, highestSingleMessage);
     expect(applyPlay(following, 0, ["AS"], settings), isA<StepOk>());
-    expect(applyPass(following, 0, settings), isA<StepOk>());
+    final passed = applyPass(following, 0, settings) as StepBad;
+    expect(passed.message, mustPlayHighestMessage);
+  });
+
+  test("following a non-2 single forces the highest card when the next player has one", () {
+    final state = makeState(
+      hands: [
+        parseCards(["3D", "KS", "2H"]),
+        parseCards(["QS"]),
+        parseCards(["4C", "5C"]),
+        parseCards(["6D", "7D"]),
+      ],
+      turn: 0,
+      trick: mustCombo(["8D"]),
+      trickSeat: 3,
+      trickCards: ["8D"],
+    );
+    expect((applyPlay(state, 0, ["KS"], settings) as StepBad).message, highestSingleMessage);
+    expect(applyPlay(state, 0, ["2H"], settings), isA<StepOk>());
+    expect((applyPass(state, 0, settings) as StepBad).message, mustPlayHighestMessage);
+
+    final deuceOnly = makeState(
+      hands: [
+        parseCards(["2S"]),
+        parseCards(["QS"]),
+        parseCards(["4C", "5C"]),
+        parseCards(["6D"]),
+      ],
+      turn: 0,
+      trick: mustCombo(["8D"]),
+      trickSeat: 3,
+      trickCards: ["8D"],
+    );
+    expect(applyPass(deuceOnly, 0, settings), isA<StepOk>());
+  });
+
+  test("a 2 on the table may be passed, and a single played must still be the highest", () {
+    final state = makeState(
+      hands: [
+        parseCards(["9C", "2C", "2S"]),
+        parseCards(["QS"]),
+        parseCards(["4C", "5C"]),
+        parseCards(["6D", "7D"]),
+      ],
+      turn: 0,
+      trick: mustCombo(["2D"]),
+      trickSeat: 3,
+      trickCards: ["2D"],
+    );
+    expect(applyPass(state, 0, settings), isA<StepOk>());
+    expect((applyPlay(state, 0, ["2C"], settings) as StepBad).message, highestSingleMessage);
+    expect(applyPlay(state, 0, ["2S"], settings), isA<StepOk>());
+  });
+
+  test("passing is allowed when the highest card cannot beat the single", () {
+    final state = makeState(
+      hands: [
+        parseCards(["3D", "KH", "AH"]),
+        parseCards(["QS"]),
+        parseCards(["4C", "5C"]),
+        parseCards(["6D", "7D"]),
+      ],
+      turn: 0,
+      trick: mustCombo(["AS"]),
+      trickSeat: 3,
+      trickCards: ["AS"],
+    );
+    expect(applyPlay(state, 0, ["AH"], settings), isA<StepBad>());
+    expect(applyPass(state, 0, settings), isA<StepOk>());
+  });
+
+  test("a normal single is not forced when the next player has more than one card", () {
+    final state = makeState(
+      hands: [
+        parseCards(["3D", "7C", "AS"]),
+        parseCards(["QS", "4C"]),
+        parseCards(["2H"]),
+        parseCards(["6D", "7D"]),
+      ],
+      turn: 0,
+      trick: mustCombo(["5D"]),
+      trickSeat: 3,
+      trickCards: ["5D"],
+    );
+    expect(applyPlay(state, 0, ["7C"], settings), isA<StepOk>());
+    expect(applyPass(state, 0, settings), isA<StepOk>());
   });
 }

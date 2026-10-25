@@ -114,6 +114,49 @@ test("bots play their highest single, not a lower one, when the next player has 
   if (lead.kind === "play") assert.deepEqual(lead.cards, ["2C"]);
 });
 
+test("bots must play their highest card on a non-2 single when the next player has one card", () => {
+  const trick = identify(parseCards(["8D"]), false);
+  assert.ok(trick);
+  for (const difficulty of ["easy", "normal", "hard"] as const) {
+    const move = chooseMove(view({
+      hand: parseCards(["3D", "KS", "2H"]),
+      difficulty,
+      counts: [3, 1, 12, 10],
+      trick,
+      trickSeat: 3,
+    }));
+    assert.equal(move.kind, "play");
+    if (move.kind === "play") assert.deepEqual(move.cards, ["2H"]);
+  }
+});
+
+test("a bot's single on a 2 is still its highest card, and it passes when it cannot beat", () => {
+  const two = identify(parseCards(["2D"]), false);
+  assert.ok(two);
+  for (const difficulty of ["easy", "normal", "hard"] as const) {
+    const move = chooseMove(view({
+      hand: parseCards(["9C", "2C", "2S"]),
+      difficulty,
+      counts: [3, 1, 12, 10],
+      trick: two,
+      trickSeat: 3,
+    }));
+    if (move.kind === "pass") continue;
+    assert.deepEqual(move.cards, ["2S"]);
+  }
+
+  const ace = identify(parseCards(["AS"]), false);
+  assert.ok(ace);
+  const passed = chooseMove(view({
+    hand: parseCards(["3D", "KH", "AH"]),
+    difficulty: "hard",
+    counts: [3, 1, 12, 10],
+    trick: ace,
+    trickSeat: 3,
+  }));
+  assert.equal(passed.kind, "pass");
+});
+
 function playHand(seed: number, difficulties: readonly Difficulty[]): number[] {
   const deck = fullDeck();
   shuffleInPlace(deck, mulberryUint32(seed));

@@ -653,7 +653,8 @@ class _OnlinePageState extends State<OnlinePage> {
     final leading = view.trick == null;
     final stuck = mine && local != null && leading && legalSelections(local, view.you, view.settings).isEmpty;
     final oneCard = mine && local != null && nextPlayerHasOneCard(local, view.you);
-    final note = oneCard ? highestSingleNote : null;
+    final note = oneCard ? oneCardNote(local, view.you, view.settings) : null;
+    final mayPass = mine && local != null && passIssue(local, view.you, view.settings) == null;
     final waiting = mine ? view.message : "Waiting for ${view.seats[view.turn ?? view.you].name ?? "the next player"}";
     final left = _remaining(view);
     final shownTurn = _dwelling && _actor != null ? _actor : view.turn;
@@ -684,7 +685,7 @@ class _OnlinePageState extends State<OnlinePage> {
         soundOn: _sound,
         onToggleSound: _toggleSound,
         canPlay: mine && issue == null,
-        canPass: mine && (!leading || stuck),
+        canPass: mayPass,
         passLabel: stuck ? "Pass lead" : "Pass",
         reason: _error ?? (issue == null || selected.isEmpty ? note : issue),
         banner: left == null ? waiting : "$waiting  ·  ${left}s",

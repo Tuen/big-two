@@ -73,7 +73,11 @@ If the person who must lead has no legal play, the lead passes clockwise. That h
 
 When it is your turn and the next player has exactly one card left, a single must be the highest card in your hand. Rank comes first: 2, then ace, king, down to 3. The same rank is broken by suit: spades, then hearts, clubs, diamonds.
 
-A pair, a triple, or a five-card hand may be any legal value. Passing is unchanged. Leading a new trick follows the same rule: a single lead must be your highest card.
+A pair, a triple, or a five-card hand may be any legal value. Leading a new trick follows the same rule: a single lead must be your highest card. On a pair, triple, or five-card trick, passing stays as it was.
+
+If you are following a single that is not a 2, and your highest card can legally beat it, you must play that card. Passing is refused: "Next player has one card left: you must play your highest card." If your highest card cannot legally beat it, including when playing it would be going out on 2s alone, you may pass.
+
+If the single on the table is a 2 of any suit, you may pass, even when you hold a higher 2. A single you do choose to play must still be your highest card.
 
 Only the player sitting immediately before the one-card player is bound by this. Everyone else plays normally.
 

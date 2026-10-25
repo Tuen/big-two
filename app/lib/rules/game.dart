@@ -190,6 +190,14 @@ const highestSingleMessage = "Next player has one card left: you must play your 
 
 const highestSingleNote = "Next player is on one card: singles must be your highest card";
 
+const mustPlayHighestMessage = "Next player has one card left: you must play your highest card.";
+
+const mustPlayHighestNote = "Next player is on one card: you must play your highest card";
+
+const twoOnTableNote = "A 2 is on the table: you may pass, or play your highest card";
+
+const cannotBeatNote = "Your highest card can't beat this single. You may pass.";
+
 bool nextPlayerHasOneCard(HandState state, int seat) => state.hands[_nextSeat(seat)].length == 1;
 
 HandResult? resultOf(HandState state) {
@@ -250,6 +258,41 @@ String? playIssue(HandState state, int seat, List<PlayingCard> cards, Settings s
     final highest = highestCard(state.hands[seat]);
     final played = cards.first;
     if (highest != null && played != highest) return highestSingleMessage;
+  }
+  return null;
+}
+
+bool mustPlayHighestSingle(HandState state, int seat, Settings settings) {
+  if (!nextPlayerHasOneCard(state, seat)) return false;
+  final trick = state.trick;
+  if (trick == null || family(trick.kind) != "single" || trick.cards.isEmpty || trick.cards.first.rank == 15) {
+    return false;
+  }
+  final highest = highestCard(state.hands[seat]);
+  if (highest == null) return false;
+  return playIssue(state, seat, [highest], settings) == null;
+}
+
+String? oneCardNote(HandState state, int seat, Settings settings) {
+  if (!nextPlayerHasOneCard(state, seat)) return null;
+  if (mustPlayHighestSingle(state, seat, settings)) return mustPlayHighestNote;
+  final trick = state.trick;
+  if (trick != null && family(trick.kind) == "single" && trick.cards.isNotEmpty && trick.cards.first.rank == 15) {
+    return twoOnTableNote;
+  }
+  if (trick != null && family(trick.kind) == "single") {
+    final highest = highestCard(state.hands[seat]);
+    if (highest == null || playIssue(state, seat, [highest], settings) != null) return cannotBeatNote;
+  }
+  return highestSingleNote;
+}
+
+String? passIssue(HandState state, int seat, Settings settings) {
+  if (state.status != "playing") return "This hand is over";
+  if (seat != state.turn) return "Not your turn";
+  if (mustPlayHighestSingle(state, seat, settings)) return mustPlayHighestMessage;
+  if (state.trick == null && legalSelections(state, seat, settings).isNotEmpty) {
+    return "You must lead — passing isn't allowed";
   }
   return null;
 }
@@ -366,12 +409,14 @@ Step applyPlay(HandState state, int seat, List<String> cardIds, Settings setting
 }
 
 Step applyPass(HandState state, int seat, Settings settings) {
-  if (state.status != "playing") return StepBad("over", "This hand is over");
-  if (seat != state.turn) return StepBad("turn", "Not your turn");
+  final issue = passIssue(state, seat, settings);
+  if (issue != null) {
+    if (issue == mustPlayHighestMessage) return StepBad("must_play", issue);
+    if (state.status != "playing") return StepBad("over", issue);
+    if (seat != state.turn) return StepBad("turn", issue);
+    return StepBad("must_lead", issue);
+  }
   if (state.trick == null) {
-    if (legalSelections(state, seat, settings).isNotEmpty) {
-      return StepBad("must_lead", "You must lead — passing isn't allowed");
-    }
     final skips = state.leadSkips + 1;
     if (skips >= 4) {
       final done = _copy(state, leadSkips: skips, status: "complete", clearWinner: true, closedReason: "stuck");
@@ -422,6 +467,10 @@ List<String>? lowestLegalPlay(HandState state, int seat, Settings settings) {
 }
 
 Step applyTimeout(HandState state, Settings settings) {
+  if (mustPlayHighestSingle(state, state.turn, settings)) {
+    final highest = highestCard(state.hands[state.turn]);
+    if (highest != null) return applyPlay(state, state.turn, [formatCard(highest)], settings);
+  }
   if (state.trick == null) {
     final cards = lowestLegalPlay(state, state.turn, settings);
     if (cards == null) return applyPass(state, state.turn, settings);

@@ -113,12 +113,7 @@ class _PracticePageState extends State<PracticePage> {
     TableSounds.instance.deal();
   }
 
-  void _dealExample() {
-    final you = parseCards(["3D", "4C", "4H", "5D", "6D", "7D", "8D", "9D", "TC", "KS", "AH", "9S", "2C"]);
-    final next = parseCards(["QS"]);
-    final used = {...you.map(formatCard), ...next.map(formatCard)};
-    final rest = [for (final card in fullDeck()) if (!used.contains(formatCard(card))) card];
-    final state = makeState(hands: [you, next, rest.sublist(0, 19), rest.sublist(19)], turn: 0);
+  void _openScene(HandState state, String banner) {
     setState(() {
       _state = state;
       _result = null;
@@ -126,7 +121,7 @@ class _PracticePageState extends State<PracticePage> {
       _commitment = null;
       _selected.clear();
       _order = sortCards(state.hands[0], "rank").map(formatCard).toList();
-      _banner = "${_names[1]} has one card. A single must be your 2♣. A pair or the diamond straight is fine.";
+      _banner = banner;
       _reason = null;
       _cover = true;
       _secondsLeft = null;
@@ -135,6 +130,75 @@ class _PracticePageState extends State<PracticePage> {
       _fanned = false;
       _seq = 0;
     });
+  }
+
+  HandState _scene({
+    required List<String> you,
+    required List<String> next,
+    String? trick,
+    int trickSeat = 3,
+  }) {
+    final yours = parseCards(you);
+    final nxt = parseCards(next);
+    final used = {...yours.map(formatCard), ...nxt.map(formatCard)};
+    if (trick != null) used.add(trick);
+    final rest = [for (final card in fullDeck()) if (!used.contains(formatCard(card))) card];
+    final half = rest.length ~/ 2;
+    final trickCards = trick == null ? const <String>[] : [trick];
+    return makeState(
+      hands: [yours, nxt, rest.sublist(0, half), rest.sublist(half)],
+      turn: 0,
+      trick: trick == null ? null : identify(parseCards(trickCards)),
+      trickSeat: trick == null ? null : trickSeat,
+      trickCards: trickCards,
+    );
+  }
+
+  void _dealExample() {
+    _openScene(
+      _scene(
+        you: ["3D", "4C", "4H", "5D", "6D", "7D", "8D", "9D", "TC", "KS", "AH", "9S", "2C"],
+        next: ["QS"],
+      ),
+      "${_names[1]} has one card. A single must be your 2♣. A pair or the diamond straight is fine.",
+    );
+  }
+
+  void _dealMustPlay() {
+    _openScene(
+      _scene(you: ["3D", "9C", "KS", "2H"], next: ["QS"], trick: "8D"),
+      "${_names[1]} has one card. The 8♦ is not a 2, and your 2♥ beats it, so you must play the 2♥. Pass is off.",
+    );
+  }
+
+  void _dealTwoOnTable() {
+    _openScene(
+      _scene(you: ["9C", "2C", "2S"], next: ["QS"], trick: "2D"),
+      "A 2♦ is on the table. You may pass, even with the 2♠. If you play a single, it must be the 2♠.",
+    );
+  }
+
+  void _dealCannotBeat() {
+    _openScene(
+      _scene(you: ["3D", "KH", "AH"], next: ["QS"], trick: "AS"),
+      "The A♠ is on the table. Your A♥ can't beat it, so you may pass.",
+    );
+  }
+
+  void _dealNormalSingle() {
+    _openScene(
+      _scene(you: ["3D", "7C", "AS"], next: ["QS", "4C"], trick: "5D"),
+      "${_names[1]} has two cards, so this is a normal single. You may pass, or play the 7♣ or the A♠.",
+    );
+  }
+
+  void _runDeal(void Function() deal) {
+    _names = [for (final controller in _nameControllers) controller.text.trim()];
+    if (_names.any((name) => name.isEmpty)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter all four names.")));
+      return;
+    }
+    deal();
   }
 
   void _reveal() {
@@ -465,29 +529,22 @@ class _PracticePageState extends State<PracticePage> {
           ),
           const SizedBox(height: 12),
           FilledButton(
-            onPressed: () {
-              _names = [for (final controller in _nameControllers) controller.text.trim()];
-              if (_names.any((name) => name.isEmpty)) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter all four names.")));
-                return;
-              }
-              _deal();
-            },
+            onPressed: () => _runDeal(_deal),
             child: const Text("Deal"),
           ),
           if (widget.testPreview) ...[
             const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: () {
-                _names = [for (final controller in _nameControllers) controller.text.trim()];
-                if (_names.any((name) => name.isEmpty)) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter all four names.")));
-                  return;
-                }
-                _dealExample();
-              },
-              child: const Text("Deal the one-card example"),
-            ),
+            const Text("One-card examples", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            OutlinedButton(onPressed: () => _runDeal(_dealExample), child: const Text("Lead, next has one card")),
+            const SizedBox(height: 8),
+            OutlinedButton(onPressed: () => _runDeal(_dealMustPlay), child: const Text("Must play your highest card")),
+            const SizedBox(height: 8),
+            OutlinedButton(onPressed: () => _runDeal(_dealTwoOnTable), child: const Text("A 2 is on the table")),
+            const SizedBox(height: 8),
+            OutlinedButton(onPressed: () => _runDeal(_dealCannotBeat), child: const Text("Highest card can't beat")),
+            const SizedBox(height: 8),
+            OutlinedButton(onPressed: () => _runDeal(_dealNormalSingle), child: const Text("Normal single, rule off")),
           ],
         ],
       ),
@@ -526,7 +583,8 @@ class _PracticePageState extends State<PracticePage> {
     final current = piles.$1;
     final previous = piles.$2;
     final oneCard = nextPlayerHasOneCard(state, seat);
-    final note = oneCard ? highestSingleNote : null;
+    final note = oneCard ? oneCardNote(state, seat, _settings) : null;
+    final mayPass = passIssue(state, seat, _settings) == null;
     return Scaffold(
       body: TableView(
         bottom: _spot(seat, state),
@@ -549,7 +607,7 @@ class _PracticePageState extends State<PracticePage> {
         soundOn: _sound,
         onToggleSound: _toggleSound,
         canPlay: issue == null,
-        canPass: !leading || stuck,
+        canPass: mayPass,
         passLabel: stuck ? "Pass lead" : "Pass",
         reason: _reason ?? (issue == null || _selected.isEmpty ? note : issue),
         banner: "$_banner$timer",

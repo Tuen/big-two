@@ -7,6 +7,7 @@ import {
   applyPlay,
   applyTimeout,
   HIGHEST_SINGLE_MESSAGE,
+  MUST_PLAY_HIGHEST_MESSAGE,
   lowestLegalPlay,
   makeState,
   replay,
@@ -287,7 +288,12 @@ test("three passes hand the lead back, and pass-lock lasts until that happens", 
 
 test("three passes clear the trick and the last player to play leads", () => {
   let state = makeState({
-    hands: [parseCards(["3D", "9C"]), parseCards(["4C", "8D"]), parseCards(["5H"]), parseCards(["6S"])],
+    hands: [
+      parseCards(["3D", "9C", "4D"]),
+      parseCards(["4C", "8D"]),
+      parseCards(["5H", "7C"]),
+      parseCards(["6S", "7S"]),
+    ],
     turn: 0,
     firstLead: true,
   });
@@ -601,5 +607,119 @@ test("a single must be the highest card when the next player has one card", () =
   assert.equal(stillPair.ok, false);
 
   const passed = applyPass(following, 0, settings);
-  assert.equal(passed.ok, true);
+  assert.equal(passed.ok, false);
+  if (!passed.ok) assert.match(passed.message, /must play your highest card/);
 });
+
+function singleTrick(card: string) {
+  const trick = identify(parseCards([card]));
+  if (!trick) throw new Error(card);
+  return trick;
+}
+
+test("following a non-2 single forces the highest card when the next player has one", () => {
+  const state = makeState({
+    hands: [
+      parseCards(["3D", "KS", "2H"]),
+      parseCards(["QS"]),
+      parseCards(["4C", "5C"]),
+      parseCards(["6D", "7D"]),
+    ],
+    turn: 0,
+    trick: singleTrick("8D"),
+    trickSeat: 3,
+    trickCards: ["8D"],
+  });
+  const low = applyPlay(state, 0, ["KS"], settings);
+  assert.equal(low.ok, false);
+  const forced = applyPlay(state, 0, ["2H"], settings);
+  assert.equal(forced.ok, true);
+  const passed = applyPass(state, 0, settings);
+  assert.equal(passed.ok, false);
+  if (!passed.ok) assert.equal(passed.message, MUST_PLAY_HIGHEST_MESSAGE);
+
+  const deuceOnly = makeState({
+    hands: [
+      parseCards(["2S"]),
+      parseCards(["QS"]),
+      parseCards(["4C", "5C"]),
+      parseCards(["6D"]),
+    ],
+    turn: 0,
+    trick: singleTrick("8D"),
+    trickSeat: 3,
+    trickCards: ["8D"],
+  });
+  const cannotFinish = applyPass(deuceOnly, 0, settings);
+  assert.equal(cannotFinish.ok, true);
+
+  const pairTrick = makeState({
+    hands: [
+      parseCards(["9D", "9C", "2S"]),
+      parseCards(["QS"]),
+      parseCards(["4C", "5C"]),
+      parseCards(["6D", "7D"]),
+    ],
+    turn: 0,
+    trick: identify(parseCards(["4H", "4S"])),
+    trickSeat: 3,
+    trickCards: ["4H", "4S"],
+  });
+  assert.equal(applyPass(pairTrick, 0, settings).ok, true);
+  assert.equal(applyPlay(pairTrick, 0, ["9D", "9C"], settings).ok, true);
+});
+
+test("a 2 on the table may be passed, and a single played must still be the highest", () => {
+  const state = makeState({
+    hands: [
+      parseCards(["9C", "2C", "2S"]),
+      parseCards(["QS"]),
+      parseCards(["4C", "5C"]),
+      parseCards(["6D", "7D"]),
+    ],
+    turn: 0,
+    trick: singleTrick("2D"),
+    trickSeat: 3,
+    trickCards: ["2D"],
+  });
+  assert.equal(applyPass(state, 0, settings).ok, true);
+  const lowerTwo = applyPlay(state, 0, ["2C"], settings);
+  assert.equal(lowerTwo.ok, false);
+  if (!lowerTwo.ok) assert.equal(lowerTwo.message, HIGHEST_SINGLE_MESSAGE);
+  assert.equal(applyPlay(state, 0, ["2S"], settings).ok, true);
+});
+
+test("passing is allowed when the highest card cannot beat the single", () => {
+  const state = makeState({
+    hands: [
+      parseCards(["3D", "KH", "AH"]),
+      parseCards(["QS"]),
+      parseCards(["4C", "5C"]),
+      parseCards(["6D", "7D"]),
+    ],
+    turn: 0,
+    trick: singleTrick("AS"),
+    trickSeat: 3,
+    trickCards: ["AS"],
+  });
+  assert.equal(applyPlay(state, 0, ["AH"], settings).ok, false);
+  assert.equal(applyPass(state, 0, settings).ok, true);
+});
+
+test("a normal single is not forced when the next player has more than one card", () => {
+  const state = makeState({
+    hands: [
+      parseCards(["3D", "7C", "AS"]),
+      parseCards(["QS", "4C"]),
+      parseCards(["2H"]),
+      parseCards(["6D", "7D"]),
+    ],
+    turn: 0,
+    trick: singleTrick("5D"),
+    trickSeat: 3,
+    trickCards: ["5D"],
+  });
+  assert.equal(applyPlay(state, 0, ["7C"], settings).ok, true);
+  assert.equal(applyPass(state, 0, settings).ok, true);
+});
+
