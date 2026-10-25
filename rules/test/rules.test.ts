@@ -12,6 +12,8 @@ import {
   MUST_PLAY_HIGHEST_MESSAGE,
   lowestLegalPlay,
   makeState,
+  passIssue,
+  playIssue,
   replay,
   roundWinners,
   startHand,
@@ -230,6 +232,130 @@ test("you cannot go out on only 2s, but a five-card hand with a 2 can", () => {
     assert.equal(houseWon.state.winner, 0);
     assert.equal(houseWon.state.trick?.kind, "full_house");
   }
+});
+
+test("going out on only 2s is refused in every shape, and a five-card hand with a 2 can still finish", () => {
+  const others = [parseCards(["3D", "4D"]), parseCards(["5C", "6C"]), parseCards(["7H", "8H"])];
+  const seat = (ids: string[], extra: Record<string, unknown> = {}) =>
+    makeState({ hands: [parseCards(ids), ...others], turn: 0, ...extra });
+
+  for (const ids of [["2D"], ["2S"], ["2D", "2C"], ["2S", "2H"], ["2D", "2C", "2H"], ["2S", "2H", "2C"]]) {
+    const state = seat(ids);
+    const blocked = applyPlay(state, 0, ids, settings);
+    assert.equal(blocked.ok, false, ids.join(" "));
+    if (!blocked.ok) assert.equal(blocked.message, "You can't go out if you only have 2s");
+    assert.equal(playIssue(state, 0, parseCards(ids), settings), "You can't go out if you only have 2s");
+  }
+
+  const overSingle = seat(["2H"], { trick: combo(["KD"]), trickSeat: 3, trickCards: ["KD"] });
+  const overPair = seat(["2S", "2D"], { trick: combo(["AH", "AC"]), trickSeat: 3, trickCards: ["AH", "AC"] });
+  const overTriple = seat(["2S", "2H", "2C"], {
+    trick: combo(["AD", "AC", "AH"]),
+    trickSeat: 3,
+    trickCards: ["AD", "AC", "AH"],
+  });
+  for (const state of [overSingle, overPair, overTriple]) {
+    const cards = state.hands[0].map(formatCard);
+    const blocked = applyPlay(state, 0, cards, settings);
+    assert.equal(blocked.ok, false, cards.join(" "));
+    if (!blocked.ok) assert.equal(blocked.message, "You can't go out if you only have 2s");
+    assert.equal(state.status, "playing");
+  }
+
+  const onlyTwos = [
+    ["2S"],
+    ["2S", "2H"],
+    ["2S", "2H", "2C"],
+    ["2D", "2C", "2H", "2S"],
+  ];
+  for (const ids of onlyTwos) {
+    let state = seat(ids);
+    const seen = new Set<string>();
+    const pending = [state];
+    while (pending.length > 0) {
+      state = pending.pop()!;
+      const key = `${state.hands[0].map(formatCard).sort().join(".")}:${(state.trickCards ?? []).join(".")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      assert.notEqual(state.hands[0].length, 0);
+      if (state.turn !== 0 || state.status !== "playing") continue;
+      const hand = state.hands[0].map(formatCard);
+      for (let mask = 1; mask < 1 << hand.length; mask++) {
+        const play: string[] = [];
+        for (let index = 0; index < hand.length; index++) if (mask & (1 << index)) play.push(hand[index]);
+        if (![1, 2, 3, 5].includes(play.length)) continue;
+        const step = applyPlay(state, 0, play, settings);
+        if (!step.ok) continue;
+        assert.notEqual(step.state.hands[0].length, 0, `${ids.join(" ")} via ${play.join(" ")}`);
+        assert.ok(step.state.hands[0].every((card) => card.r === 15));
+        pending.push({
+          ...step.state,
+          turn: 0,
+          trick: null,
+          trickSeat: null,
+          trickCards: [],
+          consecutivePasses: 0,
+          status: "playing",
+          winner: null,
+        });
+      }
+    }
+  }
+
+  const four = seat(["2D", "2C", "2H", "2S"]);
+  assert.equal(applyPlay(four, 0, ["2D", "2C", "2H", "2S"], settings).ok, false);
+  const shed = applyPlay(four, 0, ["2D", "2C", "2H"], settings);
+  assert.equal(shed.ok, true);
+  if (shed.ok) {
+    const again = { ...shed.state, turn: 0, trick: null, trickSeat: null, trickCards: [], consecutivePasses: 0 };
+    assert.equal(applyPlay(again, 0, ["2S"], settings).ok, false);
+    assert.equal(applyPass(again, 0, settings).ok, true);
+  }
+
+  const three = seat(["2S", "2H", "2C"]);
+  assert.match(passIssue(three, 0, settings) ?? "", /must lead/);
+  const oneOfThree = applyPlay(three, 0, ["2C"], settings);
+  assert.equal(oneOfThree.ok, true);
+  if (oneOfThree.ok) {
+    const back = { ...oneOfThree.state, turn: 0, trick: null, trickSeat: null, trickCards: [], consecutivePasses: 0 };
+    assert.equal(applyPlay(back, 0, ["2S", "2H"], settings).ok, false);
+  }
+
+  assert.equal(automaticLastCard(seat(["2S"]), 0, settings), null);
+  assert.equal(automaticLastCard(overSingle, 0, settings), null);
+  const stuck = seat(["2S"], { trick: combo(["9D"]), trickSeat: 3, trickCards: ["9D"] });
+  assert.equal(applyPass(stuck, 0, settings).ok, true);
+
+  const finishes: Array<[string[], string]> = [
+    [["JH", "QD", "KC", "AS", "2D"], "straight"],
+    [["2H", "4H", "6H", "8H", "TH"], "flush"],
+    [["AH", "2H", "3H", "4H", "5H"], "flush"],
+    [["2D", "3D", "4D", "5D", "6D"], "flush"],
+    [["2D", "2C", "2H", "5S", "5D"], "full_house"],
+    [["9D", "9C", "9H", "2S", "2D"], "full_house"],
+    [["2D", "2C", "2H", "2S", "9D"], "four"],
+    [["9D", "9C", "9H", "9S", "2C"], "four"],
+    [["JD", "QD", "KD", "AD", "2D"], "straight_flush"],
+    [["JS", "QS", "KS", "AS", "2S"], "straight_flush"],
+  ];
+  for (const [ids, kind] of finishes) {
+    const won = applyPlay(seat(ids), 0, ids, settings);
+    assert.equal(won.ok, true, ids.join(" "));
+    if (!won.ok) continue;
+    assert.equal(won.state.winner, 0);
+    assert.equal(won.state.hands[0].length, 0);
+    assert.equal(won.state.trick?.kind, kind);
+    assert.equal(won.result?.cardsLeft[0], 0);
+  }
+
+  const followed = seat(["JS", "QS", "KS", "AS", "2S"], {
+    trick: combo(["3D", "4C", "5H", "6S", "7D"]),
+    trickSeat: 3,
+    trickCards: ["3D", "4C", "5H", "6S", "7D"],
+  });
+  const beatFive = applyPlay(followed, 0, ["JS", "QS", "KS", "AS", "2S"], settings);
+  assert.equal(beatFive.ok, true);
+  if (beatFive.ok) assert.equal(beatFive.state.winner, 0);
 });
 
 test("three passes hand the lead back, and pass-lock lasts until that happens", () => {

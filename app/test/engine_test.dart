@@ -169,6 +169,101 @@ void main() {
     expect(houseWon.state.trick!.kind, ComboKind.fullHouse);
   });
 
+  test("going out on only 2s is refused in every shape, and a five with a 2 can finish", () {
+    final others = [parseCards(["3D", "4D"]), parseCards(["5C", "6C"]), parseCards(["7H", "8H"])];
+    HandState seat(List<String> ids, {Combo? trick, int? trickSeat, List<String>? trickCards}) {
+      return makeState(
+        hands: [parseCards(ids), ...others],
+        turn: 0,
+        trick: trick,
+        trickSeat: trickSeat,
+        trickCards: trickCards,
+      );
+    }
+
+    for (final ids in [
+      ["2D"],
+      ["2S"],
+      ["2D", "2C"],
+      ["2S", "2H"],
+      ["2D", "2C", "2H"],
+      ["2S", "2H", "2C"],
+    ]) {
+      final state = seat(ids);
+      final blocked = applyPlay(state, 0, ids, settings);
+      expect(blocked, isA<StepBad>(), reason: ids.join(" "));
+      expect((blocked as StepBad).message, "You can't go out if you only have 2s");
+      expect(playIssue(state, 0, parseCards(ids), settings), "You can't go out if you only have 2s");
+    }
+
+    final overSingle = seat(["2H"], trick: mustCombo(["KD"]), trickSeat: 3, trickCards: ["KD"]);
+    final overPair = seat(["2S", "2D"], trick: mustCombo(["AH", "AC"]), trickSeat: 3, trickCards: ["AH", "AC"]);
+    final overTriple = seat(
+      ["2S", "2H", "2C"],
+      trick: mustCombo(["AD", "AC", "AH"]),
+      trickSeat: 3,
+      trickCards: ["AD", "AC", "AH"],
+    );
+    for (final state in [overSingle, overPair, overTriple]) {
+      final cards = state.hands[0].map(formatCard).toList();
+      final blocked = applyPlay(state, 0, cards, settings);
+      expect(blocked, isA<StepBad>(), reason: cards.join(" "));
+      expect((blocked as StepBad).message, "You can't go out if you only have 2s");
+    }
+
+    final four = seat(["2D", "2C", "2H", "2S"]);
+    expect(applyPlay(four, 0, ["2D", "2C", "2H", "2S"], settings), isA<StepBad>());
+    final shed = applyPlay(four, 0, ["2D", "2C", "2H"], settings) as StepOk;
+    final again = makeState(
+      hands: shed.state.hands,
+      turn: 0,
+      running: shed.state.running,
+    );
+    expect(applyPlay(again, 0, ["2S"], settings), isA<StepBad>());
+    expect(applyPass(again, 0, settings), isA<StepOk>());
+
+    final three = seat(["2S", "2H", "2C"]);
+    expect(passIssue(three, 0, settings), contains("must lead"));
+    final oneOfThree = applyPlay(three, 0, ["2C"], settings) as StepOk;
+    final back = makeState(hands: oneOfThree.state.hands, turn: 0, running: oneOfThree.state.running);
+    expect(applyPlay(back, 0, ["2S", "2H"], settings), isA<StepBad>());
+
+    expect(automaticLastCard(seat(["2S"]), 0, settings), isNull);
+    expect(automaticLastCard(overSingle, 0, settings), isNull);
+    expect(applyPass(seat(["2S"], trick: mustCombo(["9D"]), trickSeat: 3, trickCards: ["9D"]), 0, settings), isA<StepOk>());
+
+    final finishes = <(List<String>, ComboKind)>[
+      (["JH", "QD", "KC", "AS", "2D"], ComboKind.straight),
+      (["2H", "4H", "6H", "8H", "TH"], ComboKind.flush),
+      (["AH", "2H", "3H", "4H", "5H"], ComboKind.flush),
+      (["2D", "3D", "4D", "5D", "6D"], ComboKind.flush),
+      (["2D", "2C", "2H", "5S", "5D"], ComboKind.fullHouse),
+      (["9D", "9C", "9H", "2S", "2D"], ComboKind.fullHouse),
+      (["2D", "2C", "2H", "2S", "9D"], ComboKind.four),
+      (["9D", "9C", "9H", "9S", "2C"], ComboKind.four),
+      (["JD", "QD", "KD", "AD", "2D"], ComboKind.straightFlush),
+      (["JS", "QS", "KS", "AS", "2S"], ComboKind.straightFlush),
+    ];
+    for (final row in finishes) {
+      final ids = row.$1;
+      final kind = row.$2;
+      final won = applyPlay(seat(ids), 0, ids, settings) as StepOk;
+      expect(won.state.winner, 0, reason: ids.join(" "));
+      expect(won.state.hands[0], isEmpty);
+      expect(won.state.trick!.kind, kind);
+      expect(won.result!.cardsLeft[0], 0);
+    }
+
+    final followed = seat(
+      ["JS", "QS", "KS", "AS", "2S"],
+      trick: mustCombo(["3D", "4C", "5H", "6S", "7D"]),
+      trickSeat: 3,
+      trickCards: ["3D", "4C", "5H", "6S", "7D"],
+    );
+    final beatFive = applyPlay(followed, 0, ["JS", "QS", "KS", "AS", "2S"], settings) as StepOk;
+    expect(beatFive.state.winner, 0);
+  });
+
   test("pass lock lasts until the trick is won", () {
     var state = makeState(
       hands: [parseCards(["9C"]), parseCards(["4C"]), parseCards(["5H"]), parseCards(["6S"])],
