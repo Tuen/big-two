@@ -9,6 +9,7 @@ import "package:big_two/rules/commit.dart";
 import "package:big_two/rules/game.dart";
 import "package:big_two/sound/table_sounds.dart";
 import "package:big_two/theme.dart";
+import "package:big_two/widgets/leave_guard.dart";
 import "package:big_two/widgets/score_sheet.dart";
 import "package:big_two/widgets/table_view.dart";
 import "package:flutter/foundation.dart";
@@ -347,15 +348,29 @@ class _OnlinePageState extends State<OnlinePage> {
   @override
   Widget build(BuildContext context) {
     final view = _view;
+    final Widget page;
     if (view == null) {
-      return Scaffold(
+      page = Scaffold(
         appBar: AppBar(title: const Text("Online table")),
         body: Center(child: _error == null ? const CircularProgressIndicator() : _errorBox()),
       );
+    } else if (view.status == "playing" || _catchingUp(view)) {
+      page = _table(view);
+    } else if (view.status == "hand_end" || view.status == "round_end") {
+      page = _summary(view);
+    } else {
+      page = _lobby(view);
     }
-    if (view.status == "playing" || _catchingUp(view)) return _table(view);
-    if (view.status == "hand_end" || view.status == "round_end") return _summary(view);
-    return _lobby(view);
+    final host = view != null && view.seats[view.you].userId == view.hostId;
+    final playing = view?.status == "playing";
+    final dealt = playing == true || view?.status == "hand_end" || view?.status == "round_end";
+    final roundOver = view?.roundOver == true || view?.status == "round_end";
+    return LeaveGate(
+      warn: view != null &&
+          shouldWarnBeforeLeaving(dealt: dealt, handInProgress: playing == true, roundOver: roundOver),
+      host: host,
+      child: page,
+    );
   }
 
   Widget _errorBox() {

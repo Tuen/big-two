@@ -9,6 +9,7 @@ import "package:big_two/rules/commit.dart";
 import "package:big_two/rules/game.dart";
 import "package:big_two/sound/table_sounds.dart";
 import "package:big_two/theme.dart";
+import "package:big_two/widgets/leave_guard.dart";
 import "package:big_two/widgets/score_sheet.dart";
 import "package:big_two/widgets/table_view.dart";
 import "package:flutter/material.dart" hide Step;
@@ -422,10 +423,24 @@ class _PracticePageState extends State<PracticePage> {
   @override
   Widget build(BuildContext context) {
     final state = _state;
-    if (state == null) return _setup();
-    if (_cover && state.status == "playing") return _coverScreen(state);
-    if (state.status == "complete") return _summary(state);
-    return _table(state);
+    final playing = state?.status == "playing";
+    final dealt = state != null || (_hands.isNotEmpty && !_startingRound);
+    final roundOver = _result?.roundOver == true;
+    final Widget page;
+    if (state == null) {
+      page = _setup();
+    } else if (_cover && playing) {
+      page = _coverScreen(state);
+    } else if (state.status == "complete") {
+      page = _summary(state);
+    } else {
+      page = _table(state);
+    }
+    return LeaveGate(
+      warn: shouldWarnBeforeLeaving(dealt: dealt, handInProgress: playing, roundOver: roundOver),
+      host: true,
+      child: page,
+    );
   }
 
   void _swapSeats(int from, int to) {
