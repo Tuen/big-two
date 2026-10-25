@@ -58,6 +58,7 @@ class _OnlinePageState extends State<OnlinePage> {
   Timer? _pace;
   Timer? _undoTimer;
   Timer? _sweepTimer;
+  Timer? _botTimer;
   bool _undoDialog = false;
   String? _undoShown;
   DialogRoute<bool>? _undoRoute;
@@ -92,6 +93,7 @@ class _OnlinePageState extends State<OnlinePage> {
     _pace?.cancel();
     _undoTimer?.cancel();
     _sweepTimer?.cancel();
+    _botTimer?.cancel();
     _channel?.unsubscribe();
     super.dispose();
   }
@@ -180,6 +182,7 @@ class _OnlinePageState extends State<OnlinePage> {
   void _followUp(TableSnapshot next) {
     _armUndoClock(next);
     _armTwoSpades(next);
+    _armBots(next);
     final undo = next.undo;
     if (undo == null) {
       _undoShown = null;
@@ -207,6 +210,18 @@ class _OnlinePageState extends State<OnlinePage> {
     final wait = opened.add(const Duration(seconds: 30, milliseconds: 600)).difference(DateTime.now());
     _undoTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
       if (mounted) _refresh();
+    });
+  }
+
+  void _armBots(TableSnapshot next) {
+    _botTimer?.cancel();
+    if (next.undo != null || next.holding) return;
+    if (next.message == "2♠ – everyone passes") return;
+    final turn = next.turn;
+    if (turn == null || turn == next.you || turn < 0 || turn >= next.seats.length) return;
+    if (!next.seats[turn].isBot) return;
+    _botTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted && _view?.undo == null) _refresh();
     });
   }
 
@@ -803,7 +818,10 @@ class _OnlinePageState extends State<OnlinePage> {
           setState(_flushQueue);
           _send("pass", {"tableId": view.tableId});
         },
-        onUndo: () => _send("table", {"action": "undo", "tableId": view.tableId}),
+        onUndo: () {
+          _botTimer?.cancel();
+          _send("table", {"action": "undo", "tableId": view.tableId});
+        },
         onSortRank: () => setState(() => _order = sortCards(parseCards(view.yourCards), "rank").map(formatCard).toList()),
         onSortSuit: () => setState(() => _order = sortCards(parseCards(view.yourCards), "suit").map(formatCard).toList()),
         onScores: () => _scores(view),

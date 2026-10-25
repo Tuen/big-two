@@ -1324,7 +1324,8 @@ export async function handlePlay(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "play", cards);
-  await runBots(admin, tableId);
+  const table = await loadTable(admin, tableId);
+  if (!rulesV13(table)) await runBots(admin, tableId);
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -1334,7 +1335,8 @@ export async function handlePass(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "pass", []);
-  await runBots(admin, tableId);
+  const table = await loadTable(admin, tableId);
+  if (!rulesV13(table)) await runBots(admin, tableId);
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
