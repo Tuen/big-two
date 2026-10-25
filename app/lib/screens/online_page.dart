@@ -56,6 +56,11 @@ class _OnlinePageState extends State<OnlinePage> {
   Timer? _poll;
   Timer? _clock;
   Timer? _pace;
+  Timer? _undoTimer;
+  Timer? _sweepTimer;
+  bool _undoDialog = false;
+  String? _undoShown;
+  DialogRoute<bool>? _undoRoute;
   RealtimeChannel? _channel;
   final ActionReel _reel = ActionReel();
   final Map<int, DateTime> _passUntil = {};
@@ -85,6 +90,8 @@ class _OnlinePageState extends State<OnlinePage> {
     _poll?.cancel();
     _clock?.cancel();
     _pace?.cancel();
+    _undoTimer?.cancel();
+    _sweepTimer?.cancel();
     _channel?.unsubscribe();
     super.dispose();
   }
@@ -167,6 +174,82 @@ class _OnlinePageState extends State<OnlinePage> {
       _order = [..._order.where(ids.contains), ...next.yourCards.where((id) => !_order.contains(id))];
     }
     _syncReel(previous, next);
+    _followUp(next);
+  }
+
+  void _followUp(TableSnapshot next) {
+    _armUndoClock(next);
+    _armTwoSpades(next);
+    final undo = next.undo;
+    if (undo == null) {
+      _undoShown = null;
+      if (_undoDialog) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _closeUndoDialog());
+      }
+      return;
+    }
+    if (undo.seat == next.you || undo.youVoted || _undoDialog || _undoShown == undo.openedAt) return;
+    _undoShown = undo.openedAt;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final current = _view?.undo;
+      if (current == null || current.openedAt != undo.openedAt || current.youVoted || current.seat == _view!.you) return;
+      _askUndo(current, next.tableId);
+    });
+  }
+
+  void _armUndoClock(TableSnapshot next) {
+    _undoTimer?.cancel();
+    final undo = next.undo;
+    if (undo == null) return;
+    final opened = DateTime.tryParse(undo.openedAt);
+    if (opened == null) return;
+    final wait = opened.add(const Duration(seconds: 30, milliseconds: 600)).difference(DateTime.now());
+    _undoTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
+      if (mounted) _refresh();
+    });
+  }
+
+  void _armTwoSpades(TableSnapshot next) {
+    _sweepTimer?.cancel();
+    if (next.message != "2♠ – everyone passes") return;
+    final turn = next.turn;
+    if (turn == null || turn == next.you || !next.seats[turn].isBot) return;
+    _sweepTimer = Timer(const Duration(milliseconds: 2400), () {
+      if (mounted) _refresh();
+    });
+  }
+
+  void _closeUndoDialog() {
+    final route = _undoRoute;
+    if (route == null || !route.isActive || !mounted) return;
+    Navigator.of(context).removeRoute(route);
+  }
+
+  Future<void> _askUndo(UndoPrompt undo, String tableId) async {
+    if (_undoDialog || !mounted) return;
+    final navigator = Navigator.of(context);
+    final route = DialogRoute<bool>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black54,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+      builder: (context) => AlertDialog(
+        content: Text("${undo.name} wants to undo their last move."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Don't approve")),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text("Approve")),
+        ],
+      ),
+    );
+    _undoRoute = route;
+    _undoDialog = true;
+    final answer = await navigator.push(route);
+    _undoDialog = false;
+    if (_undoRoute == route) _undoRoute = null;
+    if (!mounted || answer == null) return;
+    if (_view?.undo?.openedAt != undo.openedAt) return;
+    await _send("table", {"action": "undo_vote", "tableId": tableId, "approve": answer});
   }
 
   void _syncReel(TableSnapshot? previous, TableSnapshot next) {
@@ -319,6 +402,7 @@ class _OnlinePageState extends State<OnlinePage> {
         "season": settings.season,
         "timezone": settings.timezone,
         "firstRoundNumber": settings.firstRoundNumber,
+        "v13": true,
       };
 
   HandState? _local(TableSnapshot view) {
@@ -670,7 +754,13 @@ class _OnlinePageState extends State<OnlinePage> {
     final oneCard = mine && local != null && nextPlayerHasOneCard(local, view.you);
     final note = oneCard ? oneCardNote(local, view.you, view.settings) : null;
     final mayPass = mine && local != null && passIssue(local, view.you, view.settings) == null;
-    final waiting = mine ? view.message : "Waiting for ${view.seats[view.turn ?? view.you].name ?? "the next player"}";
+    final voting = view.undo != null;
+    final paused = voting || view.holding;
+    final shared = _everyoneSees(view.message);
+    final waiting = mine || shared
+        ? view.message
+        : "Waiting for ${view.seats[view.turn ?? view.you].name ?? "the next player"}";
+    final voteNote = voting ? "Waiting for the undo vote" : null;
     final left = _remaining(view);
     final shownTurn = _dwelling && _actor != null ? _actor : view.turn;
     final counts = countsHolding(view.counts, _reel.queue);
@@ -699,10 +789,11 @@ class _OnlinePageState extends State<OnlinePage> {
         dealToken: _dealToken,
         soundOn: _sound,
         onToggleSound: _toggleSound,
-        canPlay: mine && issue == null,
-        canPass: mayPass,
+        canPlay: mine && issue == null && !paused,
+        canPass: mayPass && !paused,
+        canUndo: view.canUndo && !paused,
         passLabel: stuck ? "Pass lead" : "Pass",
-        reason: _error ?? (issue == null || selected.isEmpty ? note : issue),
+        reason: _error ?? voteNote ?? (issue == null || selected.isEmpty ? note : issue),
         banner: left == null ? waiting : "$waiting  ·  ${left}s",
         onPlay: () {
           setState(_flushQueue);
@@ -712,10 +803,11 @@ class _OnlinePageState extends State<OnlinePage> {
           setState(_flushQueue);
           _send("pass", {"tableId": view.tableId});
         },
+        onUndo: () => _send("table", {"action": "undo", "tableId": view.tableId}),
         onSortRank: () => setState(() => _order = sortCards(parseCards(view.yourCards), "rank").map(formatCard).toList()),
         onSortSuit: () => setState(() => _order = sortCards(parseCards(view.yourCards), "suit").map(formatCard).toList()),
         onScores: () => _scores(view),
-        onToggle: mine
+        onToggle: mine && !paused
             ? (id) => setState(() {
                 if (!_selected.add(id)) _selected.remove(id);
               })
@@ -726,6 +818,13 @@ class _OnlinePageState extends State<OnlinePage> {
         }),
       ),
     );
+  }
+
+  bool _everyoneSees(String message) {
+    return message == "Undo rejected" ||
+        message == "Move undone" ||
+        message == "2♠ – everyone passes" ||
+        message.endsWith("wants to undo their last move");
   }
 
   int? _remaining(TableSnapshot view) {

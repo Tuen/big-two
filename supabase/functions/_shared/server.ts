@@ -15,6 +15,14 @@ import {
 import { commitDeck, cryptoUint32, shuffleDeck, shuffleInPlace } from "./rules/shuffle.ts";
 import { formatDate, webhookPayload, type WebhookPayload } from "./rules/score.ts";
 import { recentActions, type RecentEvent } from "./recent.ts";
+import {
+  isLoneTwoOfSpades,
+  MOVE_UNDONE,
+  TWO_SPADES_MESSAGE,
+  UNDO_REJECTED,
+  undoOutcome,
+  type UndoOpen,
+} from "./undo.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -139,6 +147,179 @@ function settingsOf(table: Row): Settings {
   return cleanSettings(table.settings);
 }
 
+function rulesV13(table: Row): boolean {
+  return table.settings?.v13 === true;
+}
+
+function storedSettings(value: unknown, previous?: Row): Row {
+  const cleaned = cleanSettings(value, previous ? settingsOf(previous) : DEFAULT_SETTINGS);
+  const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const v13 = raw.v13 === true || previous?.settings?.v13 === true;
+  const undo = previous?.settings?.undo;
+  const hold = previous?.settings?.hold;
+  return {
+    ...cleaned,
+    ...(v13 ? { v13: true } : {}),
+    ...(undo ? { undo } : {}),
+    ...(hold ? { hold } : {}),
+  };
+}
+
+function undoOf(table: Row): UndoOpen | null {
+  const raw = table.settings?.undo;
+  if (!raw || typeof raw !== "object" || typeof raw.handId !== "string") return null;
+  return {
+    handId: raw.handId,
+    seq: Number(raw.seq),
+    seat: Number(raw.seat),
+    name: String(raw.name ?? "A player"),
+    openedAt: String(raw.openedAt ?? ""),
+    votes: raw.votes && typeof raw.votes === "object" ? { ...raw.votes } : {},
+  };
+}
+
+async function setUndo(admin: SupabaseClient, table: Row, undo: UndoOpen | null): Promise<void> {
+  const settings = { ...table.settings };
+  if (undo) settings.undo = undo;
+  else delete settings.undo;
+  const { error } = await admin.from("game_tables").update({ settings }).eq("id", table.id);
+  if (error) throw new HttpError(500, error.message);
+  table.settings = settings;
+}
+
+async function settleUndo(admin: SupabaseClient, table: Row): Promise<void> {
+  const open = undoOf(table);
+  if (!open) return;
+  const outcome = undoOutcome(open.votes, open.openedAt, Date.now());
+  if (outcome === "wait") return;
+  if (outcome === "rejected") {
+    await setUndo(admin, table, null);
+    await admin.from("hands").update({ last_message: UNDO_REJECTED }).eq("id", open.handId);
+    return;
+  }
+  const hand = await latestHand(admin, table.id);
+  if (!hand || hand.id !== open.handId || hand.status !== "playing" || hand.webhook_status) {
+    await setUndo(admin, table, null);
+    return;
+  }
+  await revertMove(admin, table, hand, open.seq);
+}
+
+function held(table: Row, now = Date.now()): boolean {
+  const raw = table.settings?.hold;
+  if (!raw || typeof raw !== "object") return false;
+  const at = Date.parse(String(raw.at ?? ""));
+  return Number.isFinite(at) && now - at < 5_000;
+}
+
+async function setHold(
+  admin: SupabaseClient,
+  table: Row,
+  hold: { handId: string; at: string } | null,
+): Promise<void> {
+  const settings = { ...table.settings };
+  if (hold) settings.hold = hold;
+  else delete settings.hold;
+  const { error } = await admin.from("game_tables").update({ settings }).eq("id", table.id);
+  if (error) throw new HttpError(500, error.message);
+  table.settings = settings;
+}
+
+async function clearStaleHold(admin: SupabaseClient, table: Row): Promise<void> {
+  if (table.settings?.hold && !held(table)) await setHold(admin, table, null);
+}
+
+async function revertMove(admin: SupabaseClient, table: Row, hand: Row, seq: number): Promise<void> {
+  if (hand.status !== "playing" || hand.webhook_status) {
+    throw new HttpError(400, "That move ended the hand");
+  }
+  const { error } = await admin.from("events").delete().eq("hand_id", hand.id).eq("seq", seq);
+  if (error) throw new HttpError(500, error.message);
+  await setUndo(admin, table, null);
+  const seats = await loadSeats(admin, table.id);
+  const replayed = await replayHand(admin, hand, settingsOf(table));
+  await saveProjection(admin, table, hand, seats, replayed.step, replayed.deckText);
+  await admin.from("hands").update({ last_message: MOVE_UNDONE }).eq("id", hand.id);
+}
+
+async function openUndo(admin: SupabaseClient, table: Row, seats: Row[], me: Row): Promise<void> {
+  await settleUndo(admin, table);
+  const fresh = await loadTable(admin, table.id);
+  await clearStaleHold(admin, fresh);
+  if (undoOf(fresh)) throw new HttpError(400, "An undo vote is already open");
+  if (held(fresh)) throw new HttpError(400, "Please wait a moment");
+  if (!rulesV13(fresh)) throw new HttpError(400, "Undo is not used at this table");
+  const hand = await latestHand(admin, table.id);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) {
+    throw new HttpError(400, "There is no move to undo");
+  }
+  const played = await replayHand(admin, hand, settingsOf(fresh));
+  const last = played.events[played.events.length - 1];
+  if (!last || Number(last.seat_index) !== me.seat_index || (last.kind !== "play" && last.kind !== "pass")) {
+    throw new HttpError(400, "You can only undo your own last move, before the next player acts");
+  }
+  const votes: Record<string, boolean> = {};
+  for (const seat of seats) {
+    if (seat.seat_index === me.seat_index) continue;
+    if (seat.is_bot) votes[String(seat.seat_index)] = true;
+  }
+  const opened: UndoOpen = {
+    handId: hand.id,
+    seq: Number(last.seq),
+    seat: me.seat_index,
+    name: String(me.display_name),
+    openedAt: new Date().toISOString(),
+    votes,
+  };
+  const outcome = undoOutcome(opened.votes, opened.openedAt, Date.now());
+  if (outcome === "approved") {
+    await revertMove(admin, fresh, hand, opened.seq);
+    return;
+  }
+  if (outcome === "rejected") {
+    await admin.from("hands").update({ last_message: UNDO_REJECTED }).eq("id", hand.id);
+    return;
+  }
+  await setUndo(admin, fresh, opened);
+  await admin.from("hands").update({ last_message: `${opened.name} wants to undo their last move` }).eq("id", hand.id);
+}
+
+async function castUndoVote(admin: SupabaseClient, table: Row, me: Row, approve: boolean): Promise<void> {
+  const open = undoOf(table);
+  if (!open) throw new HttpError(400, "There is no undo to answer");
+  if (open.seat === me.seat_index) throw new HttpError(400, "You cannot vote on your own undo");
+  const key = String(me.seat_index);
+  if (key in open.votes) throw new HttpError(400, "You already answered");
+  open.votes[key] = approve;
+  await setUndo(admin, table, open);
+  await settleUndo(admin, table);
+}
+
+async function passTheRest(admin: SupabaseClient, tableId: string): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    const table = await loadTable(admin, tableId);
+    const hand = await latestHand(admin, tableId);
+    if (!hand || hand.status !== "playing") return;
+    const played = await replayHand(admin, hand, settingsOf(table));
+    const state = played.step.state;
+    if (state.status !== "playing") return;
+    const step = applyPass(state, state.turn, settingsOf(table));
+    if (!step.ok) return;
+    const { error } = await admin.from("events").insert({
+      hand_id: hand.id,
+      seq: played.eventCount + 1,
+      seat_index: state.turn,
+      kind: "pass",
+      payload: { cards: [] },
+    });
+    if (error) throw new HttpError(500, error.message);
+    const seats = await loadSeats(admin, tableId);
+    await saveProjection(admin, table, hand, seats, step, played.deckText);
+  }
+  const hand = await latestHand(admin, tableId);
+  if (hand) await admin.from("hands").update({ last_message: TWO_SPADES_MESSAGE }).eq("id", hand.id);
+}
+
 function namesOf(seats: Row[]): (string | null)[] {
   const names: (string | null)[] = [null, null, null, null];
   for (const seat of seats) names[seat.seat_index] = seat.display_name;
@@ -250,7 +431,10 @@ function resultJson(row: Row) {
 
 export async function buildView(admin: SupabaseClient, tableId: string, userId: string) {
   await touch(admin, tableId, userId);
-  const table = await loadTable(admin, tableId);
+  let table = await loadTable(admin, tableId);
+  await clearStaleHold(admin, table);
+  await settleUndo(admin, table);
+  table = await loadTable(admin, tableId);
   const seats = await loadSeats(admin, tableId);
   const me = requireSeat(seats, userId);
   const settings = settingsOf(table);
@@ -309,6 +493,8 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
       turnStartedAt: null,
       roundOver: false,
       recent: [] as RecentEvent[],
+      canUndo: false,
+      undo: null,
     };
   }
 
@@ -331,6 +517,8 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
       turnStartedAt: null,
       roundOver: false,
       recent: [] as RecentEvent[],
+      canUndo: false,
+      undo: null,
     };
   }
 
@@ -351,6 +539,23 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
     })),
     settings,
   );
+  const open = undoOf(table);
+  const last = events.length > 0 ? events[events.length - 1] : null;
+  const canUndo = rulesV13(table)
+    && hand.status === "playing"
+    && !open
+    && !held(table)
+    && !!last
+    && Number(last.seat_index) === me.seat_index
+    && (last.kind === "play" || last.kind === "pass");
+  const undo = open && open.handId === hand.id
+    ? {
+        seat: open.seat,
+        name: open.name,
+        openedAt: open.openedAt,
+        youVoted: Object.prototype.hasOwnProperty.call(open.votes, String(me.seat_index)),
+      }
+    : null;
   return {
     ...base,
     hand: hand.hand_number,
@@ -388,6 +593,9 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
     turnStartedAt: hand.turn_started_at,
     roundOver: Boolean(hand.round_over),
     recent,
+    canUndo,
+    undo,
+    holding: held(table),
   };
 }
 
@@ -675,8 +883,12 @@ async function act(
   kind: "play" | "pass" | "timeout",
   cards: string[],
   botSeat?: number,
-) {
-  const table = await loadTable(admin, tableId);
+): Promise<boolean> {
+  let table = await loadTable(admin, tableId);
+  await clearStaleHold(admin, table);
+  await settleUndo(admin, table);
+  table = await loadTable(admin, tableId);
+  if (undoOf(table) || held(table)) throw new HttpError(400, "Wait for the undo vote");
   const seats = await loadSeats(admin, tableId);
   const settings = settingsOf(table);
   const me = botSeat == null ? requireSeat(seats, userId) : seats.find((seat) => seat.seat_index === botSeat);
@@ -706,8 +918,31 @@ async function act(
       if (String(error.code) === "23505" && attempt < 2) continue;
       throw new HttpError(500, error.message);
     }
-    await saveProjection(admin, table, hand, seats, step, played.deckText);
-    return;
+    const sweep = kind === "play"
+      && rulesV13(table)
+      && step.state.status === "playing"
+      && isLoneTwoOfSpades(step.state.trickCards);
+    if (sweep) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+    try {
+      await saveProjection(admin, table, hand, seats, step, played.deckText);
+      if (!sweep) return false;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await passTheRest(admin, tableId);
+      const paused = await loadTable(admin, tableId);
+      const settings = {
+        ...paused.settings,
+        botWaitUntil: new Date(Date.now() + 2200).toISOString(),
+      };
+      delete settings.hold;
+      const { error: pauseError } = await admin.from("game_tables").update({ settings }).eq("id", tableId);
+      if (pauseError) throw new HttpError(500, pauseError.message);
+      return true;
+    } finally {
+      if (sweep) {
+        const fresh = await loadTable(admin, tableId);
+        if (fresh.settings?.hold) await setHold(admin, fresh, null);
+      }
+    }
   }
   throw new HttpError(409, "The table changed. Try that again.");
 }
@@ -726,6 +961,11 @@ function botNames(seats: Row[]): string[] {
 function nextBotName(seats: Row[]): string {
   const used = new Set(seats.map((seat) => seat.display_name));
   return BOT_NAMES.find((name) => !used.has(name)) ?? `Bot ${seats.length + 1}`;
+}
+
+function botWaiting(table: Row, now = Date.now()): boolean {
+  const at = Date.parse(String(table.settings?.botWaitUntil ?? ""));
+  return Number.isFinite(at) && now < at;
 }
 
 function thinkDelay(handId: string, seq: number): number {
@@ -754,6 +994,13 @@ async function cardsPlayed(admin: SupabaseClient, handId: string): Promise<Card[
 async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
   let slept = 0;
   try {
+    const first = await loadTable(admin, tableId);
+    if (botWaiting(first)) return;
+    if (first.settings?.botWaitUntil) {
+      const settings = { ...first.settings };
+      delete settings.botWaitUntil;
+      await admin.from("game_tables").update({ settings }).eq("id", tableId);
+    }
     for (let step = 0; step < BOT_LOOP; step++) {
       const table = await loadTable(admin, tableId);
       if (table.status !== "playing") return;
@@ -804,7 +1051,7 @@ async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
         locked: liveState.locked,
       });
       try {
-        await act(
+        const swept = await act(
           admin,
           tableId,
           seat.user_id,
@@ -812,6 +1059,7 @@ async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
           move.kind === "play" ? move.cards : [],
           seat.seat_index,
         );
+        if (swept) return;
       } catch (error) {
         console.error(error);
         return;
@@ -868,7 +1116,7 @@ export async function handleTable(req: Request): Promise<Response> {
 
   if (action === "create") {
     const name = cleanName(body.name);
-    const settings = cleanSettings(body.settings);
+    const settings = storedSettings(body.settings);
     let table: Row | null = null;
     for (let attempt = 0; attempt < 5 && !table; attempt++) {
       const { data, error } = await admin
@@ -936,11 +1184,21 @@ export async function handleTable(req: Request): Promise<Response> {
     return json({ view: await buildView(admin, tableId, userId) });
   }
 
+  if (action === "undo" || action === "undo_vote") {
+    const table = await loadTable(admin, tableId);
+    const seats = await loadSeats(admin, tableId);
+    const me = requireSeat(seats, userId);
+    if (!rulesV13(table)) throw new HttpError(400, "Undo is not used at this table");
+    if (action === "undo") await openUndo(admin, table, seats, me);
+    else await castUndoVote(admin, table, me, body.approve === true);
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
   if (action === "settings") {
     const table = await loadTable(admin, tableId);
     if (table.host_id !== userId) throw new HttpError(403, "Only the host can change settings");
     if (table.status !== "lobby") throw new HttpError(400, "Settings can change before the first hand");
-    const settings = cleanSettings(body.settings, settingsOf(table));
+    const settings = storedSettings(body.settings, table);
     const existing = await latestHand(admin, tableId);
     if (existing) throw new HttpError(400, "Settings can change before the first hand");
     const { error } = await admin
@@ -1086,8 +1344,17 @@ export async function handleTick(req: Request): Promise<Response> {
   const tableId = String(body.tableId ?? "");
   const admin = adminClient();
   const table = await loadTable(admin, tableId);
+  await clearStaleHold(admin, table);
+  await settleUndo(admin, table);
+  const live = await loadTable(admin, tableId);
   let hand = await latestHand(admin, tableId);
-  const settings = settingsOf(table);
+  const settings = settingsOf(live);
+  if (undoOf(live) || held(live)) {
+    if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
+      await sendWebhook(admin, hand.id);
+    }
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
   if (hand?.status === "playing") {
     const played = await replayHand(admin, hand, settings);
     if (played.step.state.status === "complete") {

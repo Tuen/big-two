@@ -44,11 +44,13 @@ class TableView extends StatefulWidget {
   final VoidCallback? onToggleSound;
   final bool canPlay;
   final bool canPass;
+  final bool canUndo;
   final String passLabel;
   final String? reason;
   final String banner;
   final VoidCallback onPlay;
   final VoidCallback onPass;
+  final VoidCallback? onUndo;
   final VoidCallback onSortRank;
   final VoidCallback onSortSuit;
   final VoidCallback onScores;
@@ -78,11 +80,13 @@ class TableView extends StatefulWidget {
     this.onToggleSound,
     required this.canPlay,
     required this.canPass,
+    this.canUndo = false,
     required this.passLabel,
     required this.reason,
     required this.banner,
     required this.onPlay,
     required this.onPass,
+    this.onUndo,
     required this.onSortRank,
     required this.onSortSuit,
     required this.onScores,
@@ -251,6 +255,10 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
           ),
         if (widget.yourTurn) _yourTurn(),
         KeyedSubtree(key: _bottomKey, child: _hand(constraints.maxWidth, constraints.maxWidth >= 900 ? 96 : 74)),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(48, 2, 48, 0),
+          child: _plaque(widget.bottom, anchor: null, mine: true),
+        ),
         if (widget.reason != null)
           Padding(
             padding: const EdgeInsets.only(top: 4, left: 12, right: 12),
@@ -260,9 +268,11 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Row(
             children: [
-              Expanded(child: OutlinedButton(onPressed: widget.canPass ? widget.onPass : null, child: Text(widget.passLabel))),
-              const SizedBox(width: 12),
-              Expanded(child: FilledButton(key: const Key("play-button"), onPressed: widget.canPlay ? widget.onPlay : null, child: const Text("Play"))),
+              Expanded(child: _actionButton(widget.passLabel, filled: false, onPressed: widget.canPass ? widget.onPass : null)),
+              const SizedBox(width: 8),
+              Expanded(child: _actionButton("Undo", filled: false, onPressed: widget.canUndo ? widget.onUndo : null, buttonKey: const Key("undo-button"))),
+              const SizedBox(width: 8),
+              Expanded(child: _actionButton("Play", filled: true, onPressed: widget.canPlay ? widget.onPlay : null, buttonKey: const Key("play-button"))),
             ],
           ),
         ),
@@ -336,9 +346,13 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      _smallButton(widget.passLabel, filled: false, onPressed: widget.canPass ? widget.onPass : null),
-                      const SizedBox(height: 6),
-                      _smallButton("Play", filled: true, onPressed: widget.canPlay ? widget.onPlay : null, buttonKey: const Key("play-button")),
+                      _myLine(),
+                      const SizedBox(height: 2),
+                      _smallButton(widget.passLabel, filled: false, onPressed: widget.canPass ? widget.onPass : null, height: 30),
+                      const SizedBox(height: 2),
+                      _smallButton("Undo", filled: false, onPressed: widget.canUndo ? widget.onUndo : null, buttonKey: const Key("undo-button"), height: 30),
+                      const SizedBox(height: 2),
+                      _smallButton("Play", filled: true, onPressed: widget.canPlay ? widget.onPlay : null, buttonKey: const Key("play-button"), height: 30),
                     ],
                   ),
                 ),
@@ -350,12 +364,45 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
     );
   }
 
-  Widget _smallButton(String label, {required bool filled, required VoidCallback? onPressed, Key? buttonKey}) {
+  Widget _actionButton(String label, {required bool filled, required VoidCallback? onPressed, Key? buttonKey}) {
     final style = ButtonStyle(
-      minimumSize: const WidgetStatePropertyAll(Size(96, 40)),
+      minimumSize: const WidgetStatePropertyAll(Size(0, 48)),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
-      textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 8, vertical: 10)),
+    );
+    final child = FittedBox(fit: BoxFit.scaleDown, child: Text(label));
+    if (filled) return FilledButton(key: buttonKey, style: style, onPressed: onPressed, child: child);
+    return OutlinedButton(key: buttonKey, style: style, onPressed: onPressed, child: child);
+  }
+
+  Widget _myLine() {
+    final seat = widget.bottom;
+    return Container(
+      key: const Key("my-score"),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      decoration: BoxDecoration(
+        color: const Color(0x66000000),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: seat.turn ? gold : Colors.white24),
+      ),
+      child: Text(
+        "${seat.cardsLeft} · ${seat.total} pts",
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  Widget _smallButton(String label, {required bool filled, required VoidCallback? onPressed, Key? buttonKey, double height = 40}) {
+    final style = ButtonStyle(
+      minimumSize: WidgetStatePropertyAll(Size(0, height)),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 6, vertical: 0)),
+      textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+      visualDensity: VisualDensity.compact,
     );
     final child = FittedBox(fit: BoxFit.scaleDown, child: Text(label));
     if (filled) return FilledButton(key: buttonKey, style: style, onPressed: onPressed, child: child);
@@ -455,13 +502,13 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
     );
   }
 
-  Widget _plaque(SeatSpot seat, {bool compact = false, GlobalKey? anchor}) {
+  Widget _plaque(SeatSpot seat, {bool compact = false, GlobalKey? anchor, bool mine = false}) {
     return AnimatedBuilder(
       animation: _pulse,
       builder: (context, child) {
         final alpha = seat.turn ? 0.35 + 0.45 * _pulse.value : 0.0;
         return Container(
-          key: anchor,
+          key: mine ? const Key("my-score") : anchor,
           margin: EdgeInsets.all(compact ? 2 : 6),
           padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 10, vertical: compact ? 3 : 8),
           decoration: BoxDecoration(

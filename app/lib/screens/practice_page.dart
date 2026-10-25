@@ -60,6 +60,10 @@ class _PracticePageState extends State<PracticePage> {
   int _dealToken = 0;
   String _trickOrigin = "";
   bool _fanned = false;
+  _UndoSnap? _undo;
+  bool _sweeping = false;
+  Timer? _sweep;
+  int _sweepGen = 0;
 
   @override
   void initState() {
@@ -75,6 +79,7 @@ class _PracticePageState extends State<PracticePage> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _sweep?.cancel();
     for (final controller in _nameControllers) {
       controller.dispose();
     }
@@ -108,7 +113,11 @@ class _PracticePageState extends State<PracticePage> {
       _passUntil.clear();
       _fanned = false;
       _seq = 0;
+      _undo = null;
+      _sweeping = false;
     });
+    _sweepGen += 1;
+    _sweep?.cancel();
     _ticker?.cancel();
     TableSounds.instance.unlock();
     TableSounds.instance.deal();
@@ -130,7 +139,11 @@ class _PracticePageState extends State<PracticePage> {
       _passUntil.clear();
       _fanned = false;
       _seq = 0;
+      _undo = null;
+      _sweeping = false;
     });
+    _sweepGen += 1;
+    _sweep?.cancel();
   }
 
   HandState _scene({
@@ -208,6 +221,7 @@ class _PracticePageState extends State<PracticePage> {
     final state = _state;
     setState(() {
       _cover = false;
+      _undo = null;
       _secondsLeft = seconds == 0 ? null : seconds;
       if (!_fanned) {
         _fanned = true;
@@ -221,10 +235,17 @@ class _PracticePageState extends State<PracticePage> {
     });
     TableSounds.instance.unlock();
     TableSounds.instance.yourTurn();
-    if (seconds == 0 || _state == null) return;
+    _armTimer();
+  }
+
+  void _armTimer() {
+    _ticker?.cancel();
+    final seconds = _settings.turnTimerSeconds;
+    final state = _state;
+    if (seconds == 0 || state == null || state.status != "playing" || _cover || _sweeping) return;
     final started = DateTime.now();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || _state == null || _cover) return;
+      if (!mounted || _state == null || _cover || _sweeping) return;
       final left = seconds - DateTime.now().difference(started).inSeconds;
       if (left <= 0) {
         _ticker?.cancel();
@@ -233,6 +254,91 @@ class _PracticePageState extends State<PracticePage> {
         setState(() => _secondsLeft = left);
       }
     });
+  }
+
+  void _stash(HandState state) {
+    _undo = _UndoSnap(
+      state: state,
+      order: [..._order],
+      acts: [..._acts],
+      seq: _seq,
+    );
+  }
+
+  void _undoLast() {
+    final snap = _undo;
+    if (snap == null) return;
+    _sweepGen += 1;
+    _sweep?.cancel();
+    _ticker?.cancel();
+    setState(() {
+      _state = snap.state;
+      _order = [...snap.order];
+      _acts
+        ..clear()
+        ..addAll(snap.acts);
+      _seq = snap.seq;
+      _banner = "Move undone";
+      _undo = null;
+      _sweeping = false;
+      _cover = false;
+      _selected.clear();
+      _reason = null;
+      _result = null;
+      _secondsLeft = null;
+    });
+    _armTimer();
+  }
+
+  void _beginSweep(StepOk ok) {
+    _ticker?.cancel();
+    final gen = ++_sweepGen;
+    setState(() {
+      _state = ok.state;
+      _banner = "2♠ – everyone passes";
+      _reason = null;
+      _selected.clear();
+      _cover = false;
+      _sweeping = true;
+      _secondsLeft = null;
+    });
+    _sweep?.cancel();
+    _sweep = Timer(const Duration(seconds: 1), () {
+      if (!mounted || gen != _sweepGen) return;
+      _finishSweep();
+    });
+  }
+
+  void _finishSweep() {
+    var state = _state;
+    if (state == null) return;
+    StepOk? last;
+    for (var i = 0; i < 3; i++) {
+      if (state!.status != "playing" || state!.trick == null) break;
+      final step = applyPass(state!, state!.turn, _settings);
+      if (step is! StepOk) break;
+      _remember(state!.turn, "pass", const [], "Pass");
+      last = step;
+      state = step.state;
+    }
+    _undo = null;
+    if (last != null && last.state.status == "complete") {
+      setState(() => _sweeping = false);
+      _apply(last);
+      return;
+    }
+    setState(() {
+      _state = state;
+      _sweeping = false;
+      _cover = false;
+      _banner = "2♠ – everyone passes";
+      _selected.clear();
+      _reason = null;
+      _order = sortCards(state!.hands[state.turn], "rank").map(formatCard).toList();
+      _secondsLeft = null;
+    });
+    _armPasses();
+    _armTimer();
   }
 
   void _apply(Step step) {
@@ -293,12 +399,21 @@ class _PracticePageState extends State<PracticePage> {
     if (before == null) return;
     final step = applyTimeout(before, _settings);
     if (step is StepOk) {
+      if (step.state.status == "complete") {
+        _undo = null;
+      } else {
+        _stash(before);
+      }
       final seat = before.turn;
       final played = step.state.hands[seat].length < before.hands[seat].length;
       if (played) {
         final cards = [...step.state.trickCards];
         _remember(seat, "play", cards, _comboLabel(cards));
         TableSounds.instance.playCard();
+        if (cards.length == 1 && cards.single == "2S" && step.state.status == "playing") {
+          _beginSweep(step);
+          return;
+        }
       } else {
         _remember(seat, "pass", const [], "Pass");
         TableSounds.instance.pass();
@@ -309,22 +424,36 @@ class _PracticePageState extends State<PracticePage> {
 
   void _playSelected() {
     final state = _state;
-    if (state == null) return;
+    if (state == null || _sweeping) return;
     final cards = _selected.toList();
     final step = applyPlay(state, state.turn, cards, _settings);
     if (step is StepOk) {
+      if (step.state.status == "complete") {
+        _undo = null;
+      } else {
+        _stash(state);
+      }
       _remember(state.turn, "play", cards, _comboLabel(cards));
       TableSounds.instance.unlock();
       TableSounds.instance.playCard();
+      if (step.state.status == "playing" && cards.length == 1 && cards.single == "2S") {
+        _beginSweep(step);
+        return;
+      }
     }
     _apply(step);
   }
 
   void _passTurn() {
     final state = _state;
-    if (state == null) return;
+    if (state == null || _sweeping) return;
     final step = applyPass(state, state.turn, _settings);
     if (step is StepOk) {
+      if (step.state.status == "complete") {
+        _undo = null;
+      } else {
+        _stash(state);
+      }
       _remember(state.turn, "pass", const [], "Pass");
       TableSounds.instance.unlock();
       TableSounds.instance.pass();
@@ -429,6 +558,8 @@ class _PracticePageState extends State<PracticePage> {
     final Widget page;
     if (state == null) {
       page = _setup();
+    } else if (_sweeping && playing) {
+      page = _sweepScreen();
     } else if (_cover && playing) {
       page = _coverScreen(state);
     } else if (state.status == "complete") {
@@ -566,6 +697,30 @@ class _PracticePageState extends State<PracticePage> {
     );
   }
 
+  Widget _sweepScreen() {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text("2♠ – everyone passes", textAlign: TextAlign.center, style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 12),
+                const Text("The lead is coming back.", textAlign: TextAlign.center, style: TextStyle(fontSize: 18)),
+                if (_undo != null) ...[
+                  const SizedBox(height: 24),
+                  OutlinedButton(onPressed: _undoLast, child: const Text("Undo")),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _coverScreen(HandState state) {
     return Scaffold(
       body: SafeArea(
@@ -580,6 +735,10 @@ class _PracticePageState extends State<PracticePage> {
                 Text(_names[state.turn], textAlign: TextAlign.center, style: const TextStyle(fontSize: 48, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 24),
                 FilledButton(onPressed: _reveal, child: const Text("Show my cards")),
+                if (_undo != null) ...[
+                  const SizedBox(height: 12),
+                  OutlinedButton(onPressed: _undoLast, child: const Text("Undo")),
+                ],
               ],
             ),
           ),
@@ -621,13 +780,15 @@ class _PracticePageState extends State<PracticePage> {
         dealToken: _dealToken,
         soundOn: _sound,
         onToggleSound: _toggleSound,
-        canPlay: issue == null,
-        canPass: mayPass,
+        canPlay: issue == null && !_sweeping,
+        canPass: mayPass && !_sweeping,
+        canUndo: _undo != null && !_sweeping,
         passLabel: stuck ? "Pass lead" : "Pass",
         reason: _reason ?? (issue == null || _selected.isEmpty ? note : issue),
         banner: "$_banner$timer",
         onPlay: _playSelected,
         onPass: _passTurn,
+        onUndo: _undoLast,
         onSortRank: () => _sort("rank"),
         onSortSuit: () => _sort("suit"),
         onScores: _scores,
@@ -701,4 +862,17 @@ class _PracticePageState extends State<PracticePage> {
       ),
     );
   }
+}
+
+class _UndoSnap {
+  final HandState state;
+  final List<String> order;
+  final List<RecentAction> acts;
+  final int seq;
+  const _UndoSnap({
+    required this.state,
+    required this.order,
+    required this.acts,
+    required this.seq,
+  });
 }

@@ -91,6 +91,19 @@ class HistoryHand {
   });
 }
 
+class UndoPrompt {
+  final int seat;
+  final String name;
+  final String openedAt;
+  final bool youVoted;
+  const UndoPrompt({
+    required this.seat,
+    required this.name,
+    required this.openedAt,
+    required this.youVoted,
+  });
+}
+
 class TableSnapshot {
   final String tableId;
   final String code;
@@ -120,6 +133,9 @@ class TableSnapshot {
   final bool canEditSettings;
   final String? turnStartedAt;
   final List<RecentAction> recent;
+  final bool canUndo;
+  final UndoPrompt? undo;
+  final bool holding;
 
   const TableSnapshot({
     required this.tableId,
@@ -150,6 +166,9 @@ class TableSnapshot {
     required this.canEditSettings,
     required this.turnStartedAt,
     this.recent = const [],
+    this.canUndo = false,
+    this.undo,
+    this.holding = false,
   });
 
   factory TableSnapshot.fromJson(Map<String, dynamic> json) {
@@ -245,11 +264,25 @@ class TableSnapshot {
             label: _map(row)["label"]?.toString() ?? "",
           ),
       ],
+      canUndo: json["canUndo"] == true,
+      undo: _undoFrom(json["undo"]),
+      holding: json["holding"] == true,
     );
   }
 }
 
 int _int(dynamic value) => value is int ? value : (value as num).toInt();
+
+UndoPrompt? _undoFrom(Object? raw) {
+  if (raw is! Map) return null;
+  final map = _map(raw);
+  return UndoPrompt(
+    seat: _int(map["seat"]),
+    name: map["name"]?.toString() ?? "A player",
+    openedAt: map["openedAt"]?.toString() ?? "",
+    youVoted: map["youVoted"] == true,
+  );
+}
 
 List<int> _ints(dynamic value) => [for (final item in (value as List? ?? const [])) _int(item)];
 

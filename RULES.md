@@ -83,6 +83,14 @@ Only the player sitting immediately before the one-card player is bound by this.
 
 A lower single is refused with: "Next player has one card left: you must play your highest single."
 
+## Undo
+
+Undo puts back only your own last play or pass, and only before the next player plays or passes. It never works if that play ended the hand. The other three are asked: approve, or don't approve. Two approvals put the cards back and it is your turn again. Fewer than two, or no answer within 30 seconds, rejects it. Everyone then sees "Undo rejected". Computer players always approve. Nobody can play while the question is open.
+
+## The 2 of spades
+
+A single 2 of spades cannot be beaten. About a second later the other three pass on their own, the lead comes back to the player who played it, and the table says "2♠ – everyone passes". A pair or a five-card hand that merely contains the 2 of spades is not passed automatically.
+
 ## Leading
 
 The first hand of a round is led by the holder of the 3 of diamonds, and that first play must include it. It can sit inside a pair, a triple, or a five-card hand.
