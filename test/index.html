@@ -34,6 +34,14 @@
 
   <title>Big Two (TEST VERSION)</title>
   <link rel="manifest" href="manifest.json">
+  <script>
+    window.bigTwoArmLeavePrompt = false;
+    window.addEventListener("beforeunload", function (event) {
+      if (!window.bigTwoArmLeavePrompt) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+  </script>
 </head>
 <body>
   <!--
