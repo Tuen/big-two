@@ -19,7 +19,14 @@ class PracticePage extends StatefulWidget {
   final List<String> names;
   final Settings settings;
   final bool sound;
-  const PracticePage({super.key, required this.names, required this.settings, required this.sound});
+  final bool testPreview;
+  const PracticePage({
+    super.key,
+    required this.names,
+    required this.settings,
+    required this.sound,
+    this.testPreview = false,
+  });
 
   @override
   State<PracticePage> createState() => _PracticePageState();
@@ -104,6 +111,30 @@ class _PracticePageState extends State<PracticePage> {
     _ticker?.cancel();
     TableSounds.instance.unlock();
     TableSounds.instance.deal();
+  }
+
+  void _dealExample() {
+    final you = parseCards(["3D", "4C", "4H", "5D", "6D", "7D", "8D", "9D", "TC", "KS", "AH", "9S", "2C"]);
+    final next = parseCards(["QS"]);
+    final used = {...you.map(formatCard), ...next.map(formatCard)};
+    final rest = [for (final card in fullDeck()) if (!used.contains(formatCard(card))) card];
+    final state = makeState(hands: [you, next, rest.sublist(0, 19), rest.sublist(19)], turn: 0);
+    setState(() {
+      _state = state;
+      _result = null;
+      _deck = null;
+      _commitment = null;
+      _selected.clear();
+      _order = sortCards(state.hands[0], "rank").map(formatCard).toList();
+      _banner = "${_names[1]} has one card. A single must be your 2♣. A pair or the diamond straight is fine.";
+      _reason = null;
+      _cover = true;
+      _secondsLeft = null;
+      _acts.clear();
+      _passUntil.clear();
+      _fanned = false;
+      _seq = 0;
+    });
   }
 
   void _reveal() {
@@ -444,6 +475,20 @@ class _PracticePageState extends State<PracticePage> {
             },
             child: const Text("Deal"),
           ),
+          if (widget.testPreview) ...[
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: () {
+                _names = [for (final controller in _nameControllers) controller.text.trim()];
+                if (_names.any((name) => name.isEmpty)) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter all four names.")));
+                  return;
+                }
+                _dealExample();
+              },
+              child: const Text("Deal the one-card example"),
+            ),
+          ],
         ],
       ),
     );
@@ -480,6 +525,8 @@ class _PracticePageState extends State<PracticePage> {
     final piles = _piles(state);
     final current = piles.$1;
     final previous = piles.$2;
+    final oneCard = nextPlayerHasOneCard(state, seat);
+    final note = oneCard ? highestSingleNote : null;
     return Scaffold(
       body: TableView(
         bottom: _spot(seat, state),
@@ -504,7 +551,7 @@ class _PracticePageState extends State<PracticePage> {
         canPlay: issue == null,
         canPass: !leading || stuck,
         passLabel: stuck ? "Pass lead" : "Pass",
-        reason: _reason ?? (issue == null || _selected.isEmpty ? null : issue),
+        reason: _reason ?? (issue == null || _selected.isEmpty ? note : issue),
         banner: "$_banner$timer",
         onPlay: _playSelected,
         onPass: _passTurn,

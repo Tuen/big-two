@@ -64,8 +64,12 @@ function played(cards: readonly Card[]): BotMove {
 }
 
 function legalPlays(view: BotView): Card[][] {
-  const hands: Card[][] = [[], [], [], []];
-  hands[view.seat] = view.hand.map((card) => ({ ...card }));
+  const hands: Card[][] = [0, 1, 2, 3].map((seat) => {
+    if (seat === view.seat) return view.hand.map((card) => ({ ...card }));
+    const count = view.counts[seat] ?? 0;
+    // Other hands stay hidden. Only the count matters, for the one-card single rule.
+    return Array.from({ length: count }, () => ({ r: 3, s: "D" as const }));
+  });
   const state = makeState({
     hands,
     turn: view.seat,

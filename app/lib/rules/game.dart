@@ -185,6 +185,13 @@ HandState makeState({
 
 int _nextSeat(int seat) => (seat + 1) % 4;
 
+/// A lower single is refused while the next player is on their last card.
+const highestSingleMessage = "Next player has one card left: you must play your highest single.";
+
+const highestSingleNote = "Next player is on one card: singles must be your highest card";
+
+bool nextPlayerHasOneCard(HandState state, int seat) => state.hands[_nextSeat(seat)].length == 1;
+
 HandResult? resultOf(HandState state) {
   if (state.status != "complete") return null;
   final score = scoreCounts(state.hands.map((hand) => hand.length).toList(), state.running, state.bonuses);
@@ -238,6 +245,11 @@ String? playIssue(HandState state, int seat, List<PlayingCard> cards, Settings s
   if (state.trick != null && !beats(combo, state.trick!)) return "Doesn't beat the current play";
   if (cards.length == state.hands[seat].length && cards.every((card) => card.rank == 15)) {
     return "You can't go out if you only have 2s";
+  }
+  if (cards.length == 1 && nextPlayerHasOneCard(state, seat)) {
+    final highest = highestCard(state.hands[seat]);
+    final played = cards.first;
+    if (highest != null && played != highest) return highestSingleMessage;
   }
   return null;
 }

@@ -120,7 +120,7 @@ void main() {
   test("the opening lead must include the 3 of diamonds", () {
     final state = makeState(hands: [
       parseCards(["3D", "4C"]),
-      parseCards(["5H"]),
+      parseCards(["5H", "8C"]),
       parseCards(["6S"]),
       parseCards(["7D"]),
     ], turn: 0, firstLead: true);
@@ -318,7 +318,7 @@ void main() {
     expect(passed.state.turn, 2);
 
     final leading = makeState(
-      hands: [parseCards(["9C", "AS", "3D"]), parseCards(["4C"]), parseCards(["5H"]), parseCards(["6S"])],
+      hands: [parseCards(["9C", "AS", "3D"]), parseCards(["4C", "6H"]), parseCards(["5H"]), parseCards(["6S"])],
       turn: 0,
     );
     expect(lowestLegalPlay(leading, 0, settings), ["3D"]);
@@ -360,5 +360,87 @@ void main() {
     final sorted = sortCards(parseCards(committed.canonical.split(",")), "rank");
     expect(formatCard(sorted.first), "3D");
     expect(formatCard(sorted.last), "2S");
+  });
+
+  test("a single must be the highest card when the next player has one card", () {
+    final ahead = makeState(
+      hands: [
+        parseCards(["3D", "9C", "KS", "AH", "4D", "4C"]),
+        parseCards(["2S"]),
+        parseCards(["5H", "6H"]),
+        parseCards(["7D", "8D"]),
+      ],
+      turn: 0,
+    );
+    final low = applyPlay(ahead, 0, ["9C"], settings) as StepBad;
+    expect(low.message, highestSingleMessage);
+    expect(applyPlay(ahead, 0, ["KS"], settings), isA<StepBad>());
+    final highest = applyPlay(ahead, 0, ["AH"], settings) as StepOk;
+    expect(highest.state.trickCards, ["AH"]);
+    expect(applyPlay(ahead, 0, ["4D", "4C"], settings), isA<StepOk>());
+
+    final straight = makeState(
+      hands: [
+        parseCards(["5D", "6C", "7H", "8S", "9D", "3C"]),
+        parseCards(["QS"]),
+        parseCards(["4H", "TC"]),
+        parseCards(["JD"]),
+      ],
+      turn: 0,
+    );
+    final five = applyPlay(straight, 0, ["5D", "6C", "7H", "8S", "9D"], settings) as StepOk;
+    expect(five.state.trick!.kind, ComboKind.straight);
+
+    final lead = makeState(
+      hands: [
+        parseCards(["7C", "AS", "2D"]),
+        parseCards(["4S"]),
+        parseCards(["5C", "6C"]),
+        parseCards(["8H", "9H"]),
+      ],
+      turn: 0,
+    );
+    final lowLead = applyPlay(lead, 0, ["7C"], settings) as StepBad;
+    expect(lowLead.message, contains("highest single"));
+    expect(applyPlay(lead, 0, ["2D"], settings), isA<StepOk>());
+
+    final quiet = makeState(
+      hands: [
+        parseCards(["3D", "9C", "KS"]),
+        parseCards(["4C", "5C"]),
+        parseCards(["2H"]),
+        parseCards(["6D", "7D"]),
+      ],
+      turn: 0,
+    );
+    expect(applyPlay(quiet, 0, ["3D"], settings), isA<StepOk>());
+
+    final elsewhere = makeState(
+      hands: [
+        parseCards(["3D", "9C"]),
+        parseCards(["4C", "5C", "6C"]),
+        parseCards(["2S"]),
+        parseCards(["7H", "8H"]),
+      ],
+      turn: 0,
+    );
+    expect(applyPlay(elsewhere, 0, ["3D"], settings), isA<StepOk>());
+
+    final following = makeState(
+      hands: [
+        parseCards(["6C", "AS", "4D", "4H"]),
+        parseCards(["3S"]),
+        parseCards(["9D", "TC"]),
+        parseCards(["JD"]),
+      ],
+      turn: 0,
+      trick: mustCombo(["5D"]),
+      trickSeat: 3,
+      trickCards: ["5D"],
+    );
+    final beatsButLow = applyPlay(following, 0, ["6C"], settings) as StepBad;
+    expect(beatsButLow.message, highestSingleMessage);
+    expect(applyPlay(following, 0, ["AS"], settings), isA<StepOk>());
+    expect(applyPass(following, 0, settings), isA<StepOk>());
   });
 }

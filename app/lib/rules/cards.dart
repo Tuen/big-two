@@ -32,6 +32,19 @@ class PlayingCard {
   int get hashCode => Object.hash(rank, suit);
 }
 
+bool beatsCard(PlayingCard a, PlayingCard b) {
+  if (a.rank != b.rank) return a.rank > b.rank;
+  return suitValue[a.suit]! > suitValue[b.suit]!;
+}
+
+PlayingCard? highestCard(List<PlayingCard> cards) {
+  PlayingCard? best;
+  for (final card in cards) {
+    if (best == null || beatsCard(card, best)) best = card;
+  }
+  return best;
+}
+
 Suit _suitFrom(String letter) {
   switch (letter) {
     case "D":

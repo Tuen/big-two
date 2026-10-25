@@ -6,6 +6,7 @@ import {
   applyPass,
   applyPlay,
   applyTimeout,
+  HIGHEST_SINGLE_MESSAGE,
   lowestLegalPlay,
   makeState,
   replay,
@@ -155,7 +156,7 @@ test("invalid shapes are rejected", () => {
 
 test("the opening lead must include the 3 of diamonds", () => {
   const state = makeState({
-    hands: [parseCards(["3D", "4C"]), parseCards(["5H"]), parseCards(["6S"]), parseCards(["7D"])],
+    hands: [parseCards(["3D", "4C"]), parseCards(["5H", "8C"]), parseCards(["6S"]), parseCards(["7D"])],
     turn: 0,
     firstLead: true,
   });
@@ -286,7 +287,7 @@ test("three passes hand the lead back, and pass-lock lasts until that happens", 
 
 test("three passes clear the trick and the last player to play leads", () => {
   let state = makeState({
-    hands: [parseCards(["3D", "9C"]), parseCards(["4C"]), parseCards(["5H"]), parseCards(["6S"])],
+    hands: [parseCards(["3D", "9C"]), parseCards(["4C", "8D"]), parseCards(["5H"]), parseCards(["6S"])],
     turn: 0,
     firstLead: true,
   });
@@ -447,7 +448,7 @@ test("the disconnected-player timer passes, or leads the lowest single", () => {
   if (passed.ok) assert.equal(passed.state.turn, 2);
 
   const leading = makeState({
-    hands: [parseCards(["9C", "AS", "3D"]), parseCards(["4C"]), parseCards(["5H"]), parseCards(["6S"])],
+    hands: [parseCards(["9C", "AS", "3D"]), parseCards(["4C", "6H"]), parseCards(["5H"]), parseCards(["6S"])],
     turn: 0,
   });
   assert.deepEqual(lowestLegalPlay(leading, 0, settings), ["3D"]);
@@ -504,4 +505,101 @@ test("shuffle is unbiased and the commitment matches the revealed deck", async (
   assert.equal(sorted.length, 52);
   assert.equal(formatCard(sorted[0]), "3D");
   assert.equal(formatCard(sorted[51]), "2S");
+});
+
+test("a single must be the highest card when the next player has one card", () => {
+  const ahead = makeState({
+    hands: [
+      parseCards(["3D", "9C", "KS", "AH", "4D", "4C"]),
+      parseCards(["2S"]),
+      parseCards(["5H", "6H"]),
+      parseCards(["7D", "8D"]),
+    ],
+    turn: 0,
+  });
+  const low = applyPlay(ahead, 0, ["9C"], settings);
+  assert.equal(low.ok, false);
+  if (!low.ok) assert.equal(low.message, HIGHEST_SINGLE_MESSAGE);
+  const lowerSuit = applyPlay(ahead, 0, ["KS"], settings);
+  assert.equal(lowerSuit.ok, false);
+  const highest = applyPlay(ahead, 0, ["AH"], settings);
+  assert.equal(highest.ok, true);
+  if (highest.ok) assert.deepEqual(highest.state.trickCards, ["AH"]);
+
+  const pair = applyPlay(ahead, 0, ["4D", "4C"], settings);
+  assert.equal(pair.ok, true);
+  const straight = makeState({
+    hands: [
+      parseCards(["5D", "6C", "7H", "8S", "9D", "3C"]),
+      parseCards(["QS"]),
+      parseCards(["4H", "TC"]),
+      parseCards(["JD"]),
+    ],
+    turn: 0,
+  });
+  const five = applyPlay(straight, 0, ["5D", "6C", "7H", "8S", "9D"], settings);
+  assert.equal(five.ok, true);
+  if (five.ok) assert.equal(five.state.trick?.kind, "straight");
+
+  const lead = makeState({
+    hands: [
+      parseCards(["7C", "AS", "2D"]),
+      parseCards(["4S"]),
+      parseCards(["5C", "6C"]),
+      parseCards(["8H", "9H"]),
+    ],
+    turn: 0,
+  });
+  const lowLead = applyPlay(lead, 0, ["7C"], settings);
+  assert.equal(lowLead.ok, false);
+  if (!lowLead.ok) assert.match(lowLead.message, /highest single/);
+  const highLead = applyPlay(lead, 0, ["2D"], settings);
+  assert.equal(highLead.ok, true);
+
+  const quiet = makeState({
+    hands: [
+      parseCards(["3D", "9C", "KS"]),
+      parseCards(["4C", "5C"]),
+      parseCards(["2H"]),
+      parseCards(["6D", "7D"]),
+    ],
+    turn: 0,
+  });
+  const normal = applyPlay(quiet, 0, ["3D"], settings);
+  assert.equal(normal.ok, true);
+
+  const elsewhere = makeState({
+    hands: [
+      parseCards(["3D", "9C"]),
+      parseCards(["4C", "5C", "6C"]),
+      parseCards(["2S"]),
+      parseCards(["7H", "8H"]),
+    ],
+    turn: 0,
+  });
+  const otherSeat = applyPlay(elsewhere, 0, ["3D"], settings);
+  assert.equal(otherSeat.ok, true);
+
+  const following = makeState({
+    hands: [
+      parseCards(["6C", "AS", "4D", "4H"]),
+      parseCards(["3S"]),
+      parseCards(["9D", "TC"]),
+      parseCards(["JD"]),
+    ],
+    turn: 0,
+    trick: identify(parseCards(["5D"])) ,
+    trickSeat: 3,
+    trickCards: ["5D"],
+  });
+  const beatsButLow = applyPlay(following, 0, ["6C"], settings);
+  assert.equal(beatsButLow.ok, false);
+  if (!beatsButLow.ok) assert.equal(beatsButLow.message, HIGHEST_SINGLE_MESSAGE);
+  const answering = applyPlay(following, 0, ["AS"], settings);
+  assert.equal(answering.ok, true);
+  const stillPair = applyPlay(following, 0, ["4D", "4H"], settings);
+  assert.equal(stillPair.ok, false);
+
+  const passed = applyPass(following, 0, settings);
+  assert.equal(passed.ok, true);
 });

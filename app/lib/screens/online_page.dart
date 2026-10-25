@@ -324,7 +324,16 @@ class _OnlinePageState extends State<OnlinePage> {
     if (view.turn == null) return null;
     final trickCards = view.trick?.cards ?? const <String>[];
     return makeState(
-      hands: [for (var seat = 0; seat < 4; seat++) seat == view.you ? parseCards(view.yourCards) : <PlayingCard>[]],
+      hands: [
+        for (var seat = 0; seat < 4; seat++)
+          if (seat == view.you)
+            parseCards(view.yourCards)
+          else
+            [
+              for (var index = 0; index < (seat < view.counts.length ? view.counts[seat] : 0); index++)
+                const PlayingCard(3, Suit.diamonds),
+            ],
+      ],
       turn: view.turn!,
       running: view.running,
       firstLead: view.firstLead,
@@ -643,6 +652,8 @@ class _OnlinePageState extends State<OnlinePage> {
         : (selected.isEmpty ? "Select cards to play" : playIssue(local, view.you, parseCards(selected), view.settings));
     final leading = view.trick == null;
     final stuck = mine && local != null && leading && legalSelections(local, view.you, view.settings).isEmpty;
+    final oneCard = mine && local != null && nextPlayerHasOneCard(local, view.you);
+    final note = oneCard ? highestSingleNote : null;
     final waiting = mine ? view.message : "Waiting for ${view.seats[view.turn ?? view.you].name ?? "the next player"}";
     final left = _remaining(view);
     final shownTurn = _dwelling && _actor != null ? _actor : view.turn;
@@ -675,7 +686,7 @@ class _OnlinePageState extends State<OnlinePage> {
         canPlay: mine && issue == null,
         canPass: mine && (!leading || stuck),
         passLabel: stuck ? "Pass lead" : "Pass",
-        reason: _error ?? (issue == null || selected.isEmpty ? null : issue),
+        reason: _error ?? (issue == null || selected.isEmpty ? note : issue),
         banner: left == null ? waiting : "$waiting  ·  ${left}s",
         onPlay: () {
           setState(_flushQueue);

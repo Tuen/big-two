@@ -1,4 +1,4 @@
-import { type Card, formatCard, parseCards, removeCards } from "./cards.ts";
+import { type Card, formatCard, highestCard, parseCards, removeCards, sameCard } from "./cards.ts";
 import { beats, type Combo, family, identify, neededShape } from "./combo.ts";
 import { type Bonus, type HandScore, scoreCounts } from "./score.ts";
 
@@ -62,6 +62,17 @@ export interface StepBad {
 }
 
 export type Step = StepOk | StepBad;
+
+/** A lower single is refused while the next player is on their last card. */
+export const HIGHEST_SINGLE_MESSAGE =
+  "Next player has one card left: you must play your highest single.";
+
+export const HIGHEST_SINGLE_NOTE =
+  "Next player is on one card: singles must be your highest card";
+
+export function nextSeat(seat: number): number {
+  return (seat + 1) % 4;
+}
 
 export function cloneState(state: HandState): HandState {
   return {
@@ -157,10 +168,6 @@ export function makeState(args: {
   };
 }
 
-function nextSeat(seat: number): number {
-  return (seat + 1) % 4;
-}
-
 function fail(reason: string, message: string): StepBad {
   return { ok: false, reason, message };
 }
@@ -222,6 +229,10 @@ export function playIssue(
   if (state.trick && !beats(combo, state.trick)) return "Doesn't beat the current play";
   const empties = cards.length === state.hands[seat].length;
   if (empties && cards.every((card) => card.r === 15)) return "You can't go out if you only have 2s";
+  if (cards.length === 1 && state.hands[nextSeat(seat)].length === 1) {
+    const highest = highestCard(state.hands[seat]);
+    if (highest && !sameCard(cards[0], highest)) return HIGHEST_SINGLE_MESSAGE;
+  }
   return null;
 }
 

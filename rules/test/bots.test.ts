@@ -52,7 +52,7 @@ test("normal and hard block a one-card opponent with the highest single", () => 
       hand: parseCards(["3D", "9C", "KS"]),
       difficulty,
       played: parseCards(["5D"]),
-      counts: [3, 1, 10, 8],
+      counts: [3, 10, 1, 8],
       trick,
       trickSeat: 1,
     }));
@@ -77,7 +77,7 @@ test("hard keeps a higher sure stop when a lower card already beats every unseen
   const shared = {
     hand,
     played,
-    counts: [3, 1, 10, 8],
+    counts: [3, 10, 1, 8],
     trick,
     trickSeat: 1,
   };
@@ -87,6 +87,31 @@ test("hard keeps a higher sure stop when a lower card already beats every unseen
   assert.equal(normal.kind, "play");
   if (hard.kind === "play") assert.deepEqual(hard.cards, ["9C"]);
   if (normal.kind === "play") assert.deepEqual(normal.cards, ["KS"]);
+});
+
+test("bots play their highest single, not a lower one, when the next player has one card", () => {
+  const trick = identify(parseCards(["5D"]), false);
+  assert.ok(trick);
+  for (const difficulty of ["easy", "normal", "hard"] as const) {
+    const move = chooseMove(view({
+      hand: parseCards(["6C", "9C", "KS"]),
+      difficulty,
+      played: parseCards(["5D"]),
+      counts: [3, 1, 10, 8],
+      trick,
+      trickSeat: 3,
+    }));
+    assert.equal(move.kind, "play");
+    if (move.kind === "play") assert.deepEqual(move.cards, ["KS"]);
+  }
+
+  const lead = chooseMove(view({
+    hand: parseCards(["3D", "4C", "4H", "2C"]),
+    difficulty: "easy",
+    counts: [4, 1, 12, 11],
+  }));
+  assert.equal(lead.kind, "play");
+  if (lead.kind === "play") assert.deepEqual(lead.cards, ["2C"]);
 });
 
 function playHand(seed: number, difficulties: readonly Difficulty[]): number[] {

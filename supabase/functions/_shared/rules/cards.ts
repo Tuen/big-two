@@ -63,6 +63,20 @@ export function sameCard(a: Card, b: Card): boolean {
   return a.r === b.r && a.s === b.s;
 }
 
+/** Higher rank wins. The same rank is broken by suit: spades > hearts > clubs > diamonds. */
+export function beatsCard(a: Card, b: Card): boolean {
+  if (a.r !== b.r) return a.r > b.r;
+  return SUIT_VALUE[a.s] > SUIT_VALUE[b.s];
+}
+
+export function highestCard(cards: readonly Card[]): Card | null {
+  let best: Card | null = null;
+  for (const card of cards) {
+    if (!best || beatsCard(card, best)) best = card;
+  }
+  return best;
+}
+
 export function fullDeck(): Card[] {
   const cards: Card[] = [];
   for (const suit of SUITS) {

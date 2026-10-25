@@ -69,6 +69,16 @@ You cannot go out on 2s alone. One, two, or three 2s are refused when that play 
 
 If the person who must lead has no legal play, the lead passes clockwise. That happens when their only cards are one 2 or a pair of 2s. The button says **Pass lead**. Three 2s can still lead a single or a pair and keep the rest. If all four players are skipped on an empty trick, the hand ends with no winner (`stuck`). Everyone is scored on the cards they still hold. The next hand is led by whoever holds the 3 of diamonds, the same as a first hand.
 
+## One card on the next player
+
+When it is your turn and the next player has exactly one card left, a single must be the highest card in your hand. Rank comes first: 2, then ace, king, down to 3. The same rank is broken by suit: spades, then hearts, clubs, diamonds.
+
+A pair, a triple, or a five-card hand may be any legal value. Passing is unchanged. Leading a new trick follows the same rule: a single lead must be your highest card.
+
+Only the player sitting immediately before the one-card player is bound by this. Everyone else plays normally.
+
+A lower single is refused with: "Next player has one card left: you must play your highest single."
+
 ## Leading
 
 The first hand of a round is led by the holder of the 3 of diamonds, and that first play must include it. It can sit inside a pair, a triple, or a five-card hand.

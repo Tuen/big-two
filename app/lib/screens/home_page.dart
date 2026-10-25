@@ -66,6 +66,7 @@ class _HomePageState extends State<HomePage> {
         names: [name, ...others],
         settings: defaultSettings,
         sound: _sound,
+        testPreview: kTestPreview,
       ),
     )).then((_) => _reloadSound());
   }
@@ -175,7 +176,7 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 12),
             const Text(
-              "A spade flush beats a heart flush, and a spade straight flush beats any heart straight flush. You cannot finish on 2s alone. A five-card hand may include a 2. Bonuses are added to the other players as soon as they are played.",
+              "A spade flush beats a heart flush, and a spade straight flush beats any heart straight flush. You cannot finish on 2s alone. A five-card hand may include a 2. If the next player has one card, a single must be your highest card. Bonuses are added to the other players as soon as they are played.",
               style: TextStyle(color: Colors.white70, height: 1.4),
             ),
           ],
