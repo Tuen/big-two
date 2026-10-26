@@ -134,7 +134,7 @@ If the table already has four players, **Join** offers **Watch this game**. A vi
 
 **Chat** is for that table. Players and viewers can both use it. A viewer's name is marked as a viewer. A message is at most 200 characters. Hide the chat so it does not cover the cards; a small badge shows new messages while it is hidden. The chat clears when the round ends.
 
-On a test-page table with one person and three computer players, nobody is auto-passed. That person presses Pass. The computer players still choose their own cards. A table with two or more people keeps the usual auto-pass.
+Auto-pass only happens when a single card is on the table and the player cannot beat it. A pair, three of a kind, or a five-card hand is never auto-passed: that player presses Pass, including when they are the only person at a table with three computer players. A leader who can only play 2s still presses Pass. A lone 2 of spades still makes everyone else pass.
 
 The host can also fill an empty seat with a computer player: Easy, Normal, or Hard. Normal is the default. The seat is named Bot Ruby, Bot Jade, Bot Pearl, or Bot Amber, and the table shows a robot badge. One to three humans can play with the rest filled by bots, including one human and three bots. Bots are seated players on the server. They use the same rules, see only their own cards, the cards played so far, and the other players' counts, and they take about a second to move. A later tick finishes a bot turn if the previous request stopped. A hand with any bot is still scored normally. The scoreboard says **Practice (computer players)**. Play on this device does not add bots and does not POST the webhook.
 

@@ -7,9 +7,10 @@ import {
   applyPlay,
   applyTimeout,
   autoPassBlock,
-  autoPassForHumans,
   DEFAULT_SETTINGS,
+  legalSelections,
   makeState,
+  playIssue,
   timeoutBlock,
 } from "../../supabase/functions/_shared/rules/game.ts";
 
@@ -34,9 +35,29 @@ function following(turnCards: string[], table: string[]) {
   });
 }
 
-test("an auto-pass is refused when the player can beat a single or a pair", () => {
+test("an auto-pass is refused when the player can beat a single", () => {
   assert.equal(autoPassBlock(following(["4D", "KD", "9H"], ["7S"]), 0, settings), "they can beat what is on the table");
-  assert.equal(autoPassBlock(following(["8D", "8C", "3H"], ["5H", "5D"]), 0, settings), "they can beat what is on the table");
+});
+
+test("the 2 of spades is not auto-passed against a single 2 of hearts, and it can be played", () => {
+  const state = following(["2S", "3D", "4D"], ["2H"]);
+  assert.equal(autoPassBlock(state, 0, settings), "they can beat what is on the table");
+  assert.equal(playIssue(state, 0, parseCards(["2S"]), settings), null);
+  const played = applyPlay(state, 0, ["2S"], settings);
+  assert.equal(played.ok, true);
+  if (!played.ok) return;
+  assert.deepEqual(played.state.trickCards, ["2S"]);
+});
+
+test("a pair, a triple, or a five-card hand is never auto-passed", () => {
+  assert.equal(autoPassBlock(following(["3D", "4D"], ["8C", "8D"]), 0, settings), "only a single card is auto-passed");
+  assert.equal(autoPassBlock(following(["3D"], ["8C", "8D", "8H"]), 0, settings), "only a single card is auto-passed");
+  assert.equal(
+    autoPassBlock(following(["3D", "4D", "5D", "6D", "9C"], ["3C", "4C", "5C", "6C", "7C"]), 0, settings),
+    "only a single card is auto-passed",
+  );
+  assert.equal(legalSelections(following(["3D", "4D"], ["8C", "8D"]), 0, settings).length, 0);
+  assert.equal(autoPassBlock(following(["3D", "4D"], ["AS"]), 0, settings), null);
 });
 
 test("an auto-pass stands only while it is still that player's turn and they have no play", () => {
@@ -63,10 +84,4 @@ test("a timeout clash must not be applied to the player who just received the tu
   assert.equal(wrong.ok, true);
   if (!wrong.ok) return;
   assert.notEqual(wrong.state.turn, landed.state.turn);
-});
-
-test("one human has no auto-pass, two humans keep it", () => {
-  assert.equal(autoPassForHumans(1), false);
-  assert.equal(autoPassForHumans(2), true);
-  assert.equal(autoPassForHumans(4), true);
 });

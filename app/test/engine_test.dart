@@ -673,7 +673,7 @@ void main() {
       trickSeat: 3,
       trickCards: ["8C", "8D"],
     );
-    expect(shouldAutoPass(pair, 0, settings), isTrue);
+    expect(shouldAutoPass(pair, 0, settings), isFalse);
     expect(legalSelections(pair, 0, settings), isEmpty);
 
     final straight = makeState(
@@ -694,7 +694,7 @@ void main() {
       trickCards: ["9C", "9D"],
     );
     expect(identify(parseCards(["AH", "2D", "3C", "4S", "5H"])), isNull);
-    expect(shouldAutoPass(wrapped, 0, settings), isTrue);
+    expect(shouldAutoPass(wrapped, 0, settings), isFalse);
 
     final lead = makeState(hands: [parseCards(["2S", "2H"]), ...others], turn: 0);
     expect(shouldAutoPass(lead, 0, settings), isFalse);

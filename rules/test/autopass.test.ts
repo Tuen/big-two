@@ -45,9 +45,9 @@ test("computer players: auto-pass, a leader left alone, and a pre-selected play"
   const stuck = state({
     hands: [parseCards(["3D", "4C", "5H", "6S", "9C"]), ...fillers],
     turn: 0,
-    trick: must(identify(parseCards(["8C", "8D"])), "pair"),
+    trick: must(identify(parseCards(["AS"])), "ace"),
     trickSeat: 3,
-    trickCards: ["8C", "8D"],
+    trickCards: ["AS"],
   });
   const auto = serverAutomatic(stuck, settings);
   assert.equal(auto?.kind, "pass");
@@ -57,9 +57,16 @@ test("computer players: auto-pass, a leader left alone, and a pre-selected play"
     assert.equal(AUTO_PASS_WAIT_MS, 1000);
   }
   assert.equal(legalSelections(stuck, 0, settings).length, 0);
+  const pair = state({
+    ...stuck,
+    trick: must(identify(parseCards(["8C", "8D"])), "pair"),
+    trickCards: ["8C", "8D"],
+  });
+  assert.equal(serverAutomatic(pair, settings), null);
+  assert.equal(shouldAutoPass(pair, 0, settings), false);
   const passed = applyPass(stuck, 0, settings);
   assert.equal(passed.ok, true);
-  story.push("Auto-pass: seat 1 had no pair against 8s, so the server passed them after 1 second with \"No play – auto pass\".");
+  story.push("Auto-pass: seat 1 had nothing against an ace, so the server passed them after 1 second with \"No play – auto pass\". A pair of 8s was not auto-passed.");
 
   const leader = state({
     hands: [parseCards(["2H"]), ...fillers],
@@ -128,7 +135,7 @@ test("computer players: auto-pass, a leader left alone, and a pre-selected play"
     trickCards: ["9C", "9D"],
   });
   assert.equal(identify(parseCards(["AH", "2D", "3C", "4S", "5H"])), null);
-  assert.equal(shouldAutoPass(notAStraight, 0, settings), true);
+  assert.equal(shouldAutoPass(notAStraight, 0, settings), false);
 
   const forced = state({
     hands: [
@@ -163,7 +170,7 @@ test("computer players: auto-pass, a leader left alone, and a pre-selected play"
     turn: 0,
   });
   assert.equal(serverAutomatic(table, settings), null);
-  const lead = applyPlay(table, 0, ["9C", "9D"], settings);
+  const lead = applyPlay(table, 0, ["KH"], settings);
   assert.equal(lead.ok, true);
   if (!lead.ok) return;
   table = lead.state;
@@ -188,7 +195,7 @@ test("computer players: auto-pass, a leader left alone, and a pre-selected play"
     const move = chooseMove({
       seat: table.turn,
       hand: table.hands[table.turn],
-      played: parseCards(["9C", "9D"]),
+      played: parseCards(["KH"]),
       counts: table.hands.map((hand) => hand.length),
       trick: table.trick,
       trickSeat: table.trickSeat,
@@ -255,18 +262,24 @@ test("a no-play pass is labelled for everyone, and a lone 2 of spades is not", (
     byId.delete(id);
     return card;
   });
-  const seat0 = take(["8C", "8H", "3C", "4C", "5C", "6C", "7C", "9C", "TC", "JC", "QC", "KC", "AC"]);
+  const seat0 = take(["2H", "3C", "4C", "5C", "6C", "7C", "8C", "9C", "TC", "JC", "QC", "KC", "AC"]);
   const seat1 = take(["3D", "4D", "5D", "6D", "7D", "8D", "9D", "TD", "JD", "QD", "KD", "AD", "2D"]);
   const rest = [...byId.values()];
   const deck = [...seat0, ...seat1, ...rest];
   assert.equal(deck.length, 52);
   assert.equal(new Set(deck.map(formatCard)).size, 52);
   const events: RecentEvent[] = [
-    { seq: 1, seat: 0, kind: "play", cards: ["8C", "8H"] },
+    { seq: 1, seat: 0, kind: "play", cards: ["2H"] },
     { seq: 2, seat: 1, kind: "pass", cards: [] },
   ];
   const recent = recentActions(deck, [0, 0, 0, 0], false, 0, events, settings);
   assert.equal(recent[1].label, NO_PLAY_MESSAGE);
+  const pairEvents: RecentEvent[] = [
+    { seq: 1, seat: 0, kind: "play", cards: ["3C", "4C", "5C", "6C", "7C"] },
+    { seq: 2, seat: 1, kind: "pass", cards: [] },
+  ];
+  const pairRecent = recentActions(deck, [0, 0, 0, 0], false, 0, pairEvents, settings);
+  assert.equal(pairRecent[1].label, "Pass");
   assert.equal(isLoneTwoOfSpades(["2S"]), true);
   assert.equal(isLoneTwoOfSpades(["2S", "2H"]), false);
 });

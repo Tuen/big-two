@@ -312,6 +312,7 @@ export function autoPassBlock(state: HandState, seat: number, settings: Settings
   if (state.status !== "playing") return "the hand is over";
   if (state.turn !== seat) return "it is no longer their turn";
   if (state.trick === null) return "they are leading";
+  if (family(state.trick.kind) !== "single") return "only a single card is auto-passed";
   if (legalSelections(state, seat, settings).length > 0) return "they can beat what is on the table";
   if (passIssue(state, seat, settings) !== null) return "a pass is not allowed";
   return null;
@@ -322,11 +323,6 @@ export function timeoutBlock(state: HandState, seat: number): string | null {
   if (state.status !== "playing") return "the hand is over";
   if (state.turn !== seat) return "it is no longer their turn";
   return null;
-}
-
-/** One human plays their own passes. Two or more humans keep the v1.4 auto-pass. */
-export function autoPassForHumans(humanCount: number): boolean {
-  return humanCount >= 2;
 }
 
 /** Leading a new trick, every card left is a 2, and none of them can be played. */
@@ -358,8 +354,9 @@ export type ServerAutomatic =
 
 /**
  * What the server may do without a phone asking.
- * A last card is played. A follower with no legal play is passed.
- * A leader, including one who only has 2s, is left alone. There is no client flag that can force either.
+ * A last card is played. A follower who cannot beat a single is passed.
+ * A pair, triple, or five-card hand is left for the player to pass.
+ * A leader, including one who only has 2s, is left alone.
  */
 export function serverAutomatic(state: HandState, settings: Settings): ServerAutomatic | null {
   if (state.status !== "playing") return null;

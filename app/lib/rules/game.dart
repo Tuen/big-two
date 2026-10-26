@@ -304,11 +304,11 @@ String? automaticLastCard(HandState state, int seat, Settings settings) {
 const noPlayMessage = "No play – auto pass";
 const onlyTwosLeadNote = "Only 2s left – can't go out, please pass";
 
-/// True when this seat is following and nothing they hold is a legal play.
-/// A new lead is never an auto-pass, even when the only cards are 2s.
+/// True when this seat is following a single and nothing they hold is a legal play.
+/// A pair, triple, or five-card hand is never an auto-pass. A new lead is never one either.
 bool shouldAutoPass(HandState state, int seat, Settings settings) {
   if (state.status != "playing" || state.turn != seat) return false;
-  if (state.trick == null) return false;
+  if (state.trick == null || family(state.trick!.kind) != "single") return false;
   if (passIssue(state, seat, settings) != null) return false;
   return legalSelections(state, seat, settings).isEmpty;
 }

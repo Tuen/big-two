@@ -15,7 +15,6 @@ import {
   shouldAutoPass,
   stuckLeaderAction,
   autoPassBlock,
-  autoPassForHumans,
   timeoutBlock,
   type HandState,
   type ReplayEvent,
@@ -175,22 +174,17 @@ function rulesV14(_table: Row): boolean {
   return true;
 }
 
-function humanCount(seats: Row[]): number {
-  return seats.filter((seat) => !seat.is_bot).length;
-}
-
 function playerName(seats: Row[], seat: number): string {
   return String(seats.find((item) => item.seat_index === seat)?.display_name ?? `Seat ${seat + 1}`);
 }
 
 /**
- * Auto-pass stays on for a normal table.
- * A test-page table with only one human does not auto-pass: that person presses
- * Pass, and the computer players choose for themselves.
+ * Auto-pass is on at every table.
+ * It only passes a player who cannot beat a single card.
+ * A pair, triple, or five-card hand is never auto-passed.
  */
-function passesAutomatically(table: Row, seats: Row[]): boolean {
+function passesAutomatically(table: Row, _seats: Row[]): boolean {
   if (!rulesV14(table)) return false;
-  if (table.settings?.v14 === true && !autoPassForHumans(humanCount(seats))) return false;
   return true;
 }
 
