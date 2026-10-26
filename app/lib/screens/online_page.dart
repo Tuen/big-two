@@ -1,6 +1,7 @@
 import "dart:async";
 
 import "package:big_two/online/action_reel.dart";
+import "package:big_two/online/audience.dart";
 import "package:big_two/online/game_api.dart";
 import "package:big_two/online/selection.dart";
 import "package:big_two/online/snapshot.dart";
@@ -10,8 +11,10 @@ import "package:big_two/rules/commit.dart";
 import "package:big_two/rules/game.dart";
 import "package:big_two/sound/table_sounds.dart";
 import "package:big_two/theme.dart";
+import "package:big_two/widgets/full_table_prompt.dart";
 import "package:big_two/widgets/leave_guard.dart";
 import "package:big_two/widgets/score_sheet.dart";
+import "package:big_two/widgets/table_chat.dart";
 import "package:big_two/widgets/table_view.dart";
 import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
@@ -61,7 +64,11 @@ class _OnlinePageState extends State<OnlinePage> {
   Timer? _sweepTimer;
   Timer? _botTimer;
   Timer? _noPlay;
+  Timer? _chatPoll;
   String? _noPlayCue;
+  int? _chatSeen;
+  bool _chatOpen = false;
+  final _chatTick = ValueNotifier<int>(0);
   bool _undoDialog = false;
   String? _undoShown;
   DialogRoute<bool>? _undoRoute;
@@ -98,6 +105,8 @@ class _OnlinePageState extends State<OnlinePage> {
     _sweepTimer?.cancel();
     _botTimer?.cancel();
     _noPlay?.cancel();
+    _chatPoll?.cancel();
+    _chatTick.dispose();
     _channel?.unsubscribe();
     super.dispose();
   }
@@ -111,6 +120,31 @@ class _OnlinePageState extends State<OnlinePage> {
       if (!mounted) return;
       setState(() => _accept(view));
       _listen(view.tableId);
+    } on GameException catch (error) {
+      if (!mounted) return;
+      final offered = !widget.create &&
+          (error.message == "That table is full" || error.message == "That table has already started");
+      if (!offered) {
+        setState(() => _error = error.message);
+        return;
+      }
+      final watch = await showDialog<bool>(
+        context: context,
+        builder: (context) => FullTablePrompt(message: error.message),
+      );
+      if (!mounted) return;
+      if (watch != true) {
+        Navigator.of(context).pop();
+        return;
+      }
+      try {
+        final view = await widget.api.call("table", {"action": "watch", "name": widget.name, "code": widget.code});
+        if (!mounted) return;
+        setState(() => _accept(view));
+        _listen(view.tableId);
+      } catch (watchError) {
+        if (mounted) setState(() => _error = watchError.toString());
+      }
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     }
@@ -184,11 +218,82 @@ class _OnlinePageState extends State<OnlinePage> {
     if (dropSelection(newHand: newHand, cardsChanged: cardsChanged, trickWon: trickWon, handEnded: handEnded)) {
       _selected.clear();
     }
+    _noteChat(next);
+    _chatTick.value++;
     _syncReel(previous, next);
     _followUp(next);
   }
 
+  void _noteChat(TableSnapshot next) {
+    if (next.chat.isEmpty) return;
+    final latest = next.chat.last.id;
+    if (_chatOpen || _chatSeen == null) _chatSeen = latest;
+  }
+
+  int _unread(TableSnapshot view) => unreadChat([for (final line in view.chat) line.id], _chatSeen);
+
+  String? _audience(TableSnapshot view) {
+    final count = view.viewerCount;
+    final bits = <String>[
+      if (view.watching) "Watching",
+      if (count == 1) "1 watching",
+      if (count > 1) "$count watching",
+    ];
+    if (bits.isEmpty) return null;
+    return bits.join(" · ");
+  }
+
+  Widget _chatAction(TableSnapshot view) {
+    return Badge(
+      isLabelVisible: _unread(view) > 0,
+      label: Text("${_unread(view)}"),
+      child: IconButton(
+        tooltip: "Chat",
+        onPressed: () => _openChat(view),
+        icon: const Icon(Icons.chat_bubble_outline),
+      ),
+    );
+  }
+
+  Future<void> _openChat(TableSnapshot view) async {
+    if (view.chat.isNotEmpty) setState(() => _chatSeen = view.chat.last.id);
+    setState(() => _chatOpen = true);
+    _chatPoll?.cancel();
+    _chatPoll = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return ValueListenableBuilder<int>(
+          valueListenable: _chatTick,
+          builder: (context, value, child) {
+            final current = _view ?? view;
+            return TableChatSheet(
+              messages: current.chat,
+              closed: current.status == "round_end" || current.roundOver,
+              onSend: (text) => _send("table", {"action": "chat", "tableId": current.tableId, "text": text}),
+            );
+          },
+        );
+      },
+    );
+    _chatPoll?.cancel();
+    _chatPoll = null;
+    if (mounted) {
+      final current = _view;
+      setState(() {
+        _chatOpen = false;
+        if (current != null && current.chat.isNotEmpty) _chatSeen = current.chat.last.id;
+      });
+    }
+  }
+
   void _followUp(TableSnapshot next) {
+    if (next.watching) {
+      _armBots(next);
+      _armTwoSpades(next);
+      return;
+    }
     _armUndoClock(next);
     _armTwoSpades(next);
     _armBots(next);
@@ -490,12 +595,13 @@ class _OnlinePageState extends State<OnlinePage> {
     } else {
       page = _lobby(view);
     }
-    final host = view != null && view.seats[view.you].userId == view.hostId;
+    final host = view != null && !view.watching && view.seats[view.you].userId == view.hostId;
     final playing = view?.status == "playing";
     final dealt = playing == true || view?.status == "hand_end" || view?.status == "round_end";
     final roundOver = view?.roundOver == true || view?.status == "round_end";
     return LeaveGate(
       warn: view != null &&
+          !view.watching &&
           shouldWarnBeforeLeaving(dealt: dealt, handInProgress: playing == true, roundOver: roundOver),
       host: host,
       child: page,
@@ -517,10 +623,13 @@ class _OnlinePageState extends State<OnlinePage> {
   }
 
   Widget _lobby(TableSnapshot view) {
-    final host = view.seats[view.you].userId == view.hostId;
+    final host = !view.watching && view.seats[view.you].userId == view.hostId;
     final full = view.seats.every((seat) => seat.userId != null);
     return Scaffold(
-      appBar: AppBar(title: Text(full ? "Set the seating" : "Waiting for four")),
+      appBar: AppBar(
+        title: Text(view.watching ? "Watching" : (full ? "Set the seating" : "Waiting for four")),
+        actions: [_chatAction(view)],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
@@ -530,6 +639,10 @@ class _OnlinePageState extends State<OnlinePage> {
           if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_error!, style: const TextStyle(color: gold))),
           const SizedBox(height: 16),
           Text(view.message, style: const TextStyle(fontSize: 18)),
+          if (_audience(view) != null) ...[
+            const SizedBox(height: 8),
+            Text(_audience(view)!, style: const TextStyle(fontSize: 16, color: gold, fontWeight: FontWeight.w700)),
+          ],
           const SizedBox(height: 8),
           for (var index = 0; index < view.seats.length; index++) _seatRow(view, index, host),
           if (host) ...[
@@ -789,7 +902,7 @@ class _OnlinePageState extends State<OnlinePage> {
 
   Widget _table(TableSnapshot view) {
     final local = _local(view);
-    final mine = view.turn == view.you;
+    final mine = watcherCanAct(watching: view.watching, yourTurn: view.turn == view.you, allowed: true);
     final selected = _selected.toList();
     final issue = !mine || local == null
         ? null
@@ -815,6 +928,11 @@ class _OnlinePageState extends State<OnlinePage> {
     final previous = _reel.previous;
     final trickName = trick == null ? null : view.seats[trick.seat].name;
     final previousName = previous == null ? null : view.seats[previous.seat].name;
+    final audience = _audience(view);
+    final banner = [
+      if (audience != null) audience,
+      if (left == null) waiting else "$waiting  ·  ${left}s",
+    ].join("  ·  ");
     return Scaffold(
       body: TableView(
         bottom: _spot(view, view.you, turn: shownTurn == view.you, cards: counts[view.you]),
@@ -830,7 +948,7 @@ class _OnlinePageState extends State<OnlinePage> {
         previousLabel: previous?.label,
         previousPlayer: previousName,
         previousIsLastTrick: previous?.lastTrick ?? false,
-        yourTurn: view.status == "playing" && view.turn == view.you,
+        yourTurn: view.status == "playing" && mine,
         playToken: _playToken,
         trickOrigin: _trickOrigin,
         dealToken: _dealToken,
@@ -838,10 +956,10 @@ class _OnlinePageState extends State<OnlinePage> {
         onToggleSound: _toggleSound,
         canPlay: canPressPlay(yourTurn: mine, paused: paused, issue: issue),
         canPass: mayPass && !paused,
-        canUndo: view.canUndo && !paused,
+        canUndo: !view.watching && view.canUndo && !paused,
         passLabel: stuck ? "Pass lead" : "Pass",
         reason: _error ?? voteNote ?? (issue == null || selected.isEmpty ? note : issue),
-        banner: left == null ? waiting : "$waiting  ·  ${left}s",
+        banner: banner,
         onPlay: () {
           setState(_flushQueue);
           _send("play", {"tableId": view.tableId, "cards": selected});
@@ -857,7 +975,9 @@ class _OnlinePageState extends State<OnlinePage> {
         onSortRank: () => setState(() => _order = sortCards(parseCards(view.yourCards), "rank").map(formatCard).toList()),
         onSortSuit: () => setState(() => _order = sortCards(parseCards(view.yourCards), "suit").map(formatCard).toList()),
         onScores: () => _scores(view),
-        onToggle: view.status == "playing"
+        chatUnread: _unread(view),
+        onChat: () => _openChat(view),
+        onToggle: !view.watching && view.status == "playing"
             ? (id) => setState(() {
                 if (!_selected.add(id)) _selected.remove(id);
               })
@@ -908,6 +1028,9 @@ class _OnlinePageState extends State<OnlinePage> {
         : commitDeck(parseCards(view.deckReveal!.split(","))).commitment == view.commitment;
     return Scaffold(
       appBar: AppBar(title: Text(view.roundOver ? "Round over" : "Hand over"), actions: [
+        if (_audience(view) != null)
+          Center(child: Padding(padding: const EdgeInsets.only(right: 8), child: Text(_audience(view)!, style: const TextStyle(color: gold)))),
+        _chatAction(view),
         TextButton(onPressed: () => _scores(view), child: const Text("Scores")),
       ]),
       body: ListView(

@@ -91,6 +91,14 @@ class HistoryHand {
   });
 }
 
+class ChatLine {
+  final int id;
+  final String name;
+  final bool viewer;
+  final String text;
+  const ChatLine({required this.id, required this.name, required this.viewer, required this.text});
+}
+
 class UndoPrompt {
   final int seat;
   final String name;
@@ -136,6 +144,9 @@ class TableSnapshot {
   final bool canUndo;
   final UndoPrompt? undo;
   final bool holding;
+  final bool watching;
+  final int viewerCount;
+  final List<ChatLine> chat;
 
   const TableSnapshot({
     required this.tableId,
@@ -169,6 +180,9 @@ class TableSnapshot {
     this.canUndo = false,
     this.undo,
     this.holding = false,
+    this.watching = false,
+    this.viewerCount = 0,
+    this.chat = const [],
   });
 
   factory TableSnapshot.fromJson(Map<String, dynamic> json) {
@@ -267,6 +281,17 @@ class TableSnapshot {
       canUndo: json["canUndo"] == true,
       undo: _undoFrom(json["undo"]),
       holding: json["holding"] == true,
+      watching: json["watching"] == true,
+      viewerCount: json["viewerCount"] == null ? 0 : _int(json["viewerCount"]),
+      chat: [
+        for (final row in (json["chat"] as List? ?? const []))
+          ChatLine(
+            id: _int(_map(row)["id"]),
+            name: _map(row)["name"]?.toString() ?? "",
+            viewer: _map(row)["viewer"] == true,
+            text: _map(row)["text"]?.toString() ?? "",
+          ),
+      ],
     );
   }
 }

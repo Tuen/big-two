@@ -24,6 +24,14 @@ import { commitDeck, cryptoUint32, shuffleDeck, shuffleInPlace } from "./rules/s
 import { formatDate, webhookPayload, type WebhookPayload } from "./rules/score.ts";
 import { recentActions, type RecentEvent } from "./recent.ts";
 import {
+  chatText,
+  clipSpectator,
+  freshViewers,
+  VIEWER_CAP,
+  visibleChat,
+  type ChatLine,
+} from "./audience.ts";
+import {
   isLoneTwoOfSpades,
   MOVE_UNDONE,
   TWO_SPADES_MESSAGE,
@@ -370,6 +378,62 @@ function requireSeat(seats: Row[], userId: string): Row {
   return seat;
 }
 
+async function viewerRow(admin: SupabaseClient, tableId: string, userId: string): Promise<Row | null> {
+  const { data, error } = await admin.from("table_viewers").select("*").eq("table_id", tableId).eq("user_id", userId).maybeSingle();
+  if (error) throw new HttpError(500, error.message);
+  return data;
+}
+
+async function touchViewer(admin: SupabaseClient, tableId: string, userId: string): Promise<void> {
+  const { error } = await admin
+    .from("table_viewers")
+    .update({ last_seen: new Date().toISOString() })
+    .eq("table_id", tableId)
+    .eq("user_id", userId);
+  if (error) throw new HttpError(500, error.message);
+}
+
+async function audienceOf(admin: SupabaseClient, table: Row): Promise<{ viewerCount: number; chat: ChatLine[] }> {
+  const { data: viewers, error } = await admin.from("table_viewers").select("last_seen").eq("table_id", table.id);
+  if (error) throw new HttpError(500, error.message);
+  const { data: messages, error: messageError } = await admin
+    .from("table_messages")
+    .select("id, display_name, viewer, body")
+    .eq("table_id", table.id)
+    .eq("round_number", table.round_number)
+    .order("id", { ascending: false })
+    .limit(40);
+  if (messageError) throw new HttpError(500, messageError.message);
+  const lines = ((messages ?? []) as Row[]).reverse().map((row) => ({
+    id: Number(row.id),
+    name: String(row.display_name),
+    viewer: Boolean(row.viewer),
+    text: String(row.body),
+  }));
+  return {
+    viewerCount: freshViewers((viewers ?? []) as { last_seen: string }[]).length,
+    chat: visibleChat(lines, table.status === "round_end"),
+  };
+}
+
+async function clearChat(admin: SupabaseClient, tableId: string): Promise<void> {
+  const { error } = await admin.from("table_messages").delete().eq("table_id", tableId);
+  if (error) throw new HttpError(500, error.message);
+}
+
+function withAudience<T extends Record<string, unknown>>(
+  view: T,
+  watching: boolean,
+  audience: { viewerCount: number; chat: ChatLine[] },
+): T {
+  const shared = { ...view, viewerCount: audience.viewerCount, chat: audience.chat };
+  if (!watching) return clipSpectator(shared, false);
+  const seats = Array.isArray(shared.seats)
+    ? shared.seats.map((seat) => ({ ...(seat as Row), userId: null }))
+    : shared.seats;
+  return clipSpectator({ ...shared, seats }, true);
+}
+
 async function latestHand(admin: SupabaseClient, tableId: string): Promise<Row | null> {
   const { data, error } = await admin
     .from("hands")
@@ -454,7 +518,16 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
   await settleUndo(admin, table);
   table = await loadTable(admin, tableId);
   const seats = await loadSeats(admin, tableId);
-  const me = requireSeat(seats, userId);
+  const me = seats.find((item) => item.user_id === userId) ?? null;
+  if (!me) {
+    const viewer = await viewerRow(admin, tableId, userId);
+    if (!viewer) throw new HttpError(403, "You are not at this table");
+    await touchViewer(admin, tableId, userId);
+  }
+  const audience = await audienceOf(admin, table);
+  const watching = me == null;
+  const seatIndex = me?.seat_index ?? 0;
+  const finish = <T extends Record<string, unknown>>(view: T) => withAudience(view, watching, audience);
   const settings = settingsOf(table);
   const hand = await latestHand(admin, tableId);
   const { history, archive } = await historyFor(admin, tableId, table.round_number);
@@ -463,7 +536,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
     code: table.code,
     status: table.status,
     hostId: table.host_id,
-    you: me.seat_index,
+    you: seatIndex,
     season: table.season,
     round: table.round_number,
     settings,
@@ -493,7 +566,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
         ? `Round ${table.round_number}. Set the seating, then deal. Seat 1 leads.`
         : "Everyone is here. Seat 1 leads, then play goes to the left."
       : "Waiting for four players.";
-    return {
+    return finish({
       ...base,
       hand: 0,
       yourCards: [] as string[],
@@ -513,11 +586,11 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
       recent: [] as RecentEvent[],
       canUndo: false,
       undo: null,
-    };
+    });
   }
 
   if (!hand) {
-    return {
+    return finish({
       ...base,
       hand: 0,
       yourCards: [] as string[],
@@ -537,7 +610,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
       recent: [] as RecentEvent[],
       canUndo: false,
       undo: null,
-    };
+    });
   }
 
   const { step, deckText, events } = await replayHand(admin, hand, settings);
@@ -560,7 +633,8 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
   );
   const open = undoOf(table);
   const last = events.length > 0 ? events[events.length - 1] : null;
-  const canUndo = rulesV13(table)
+  const canUndo = !!me
+    && rulesV13(table)
     && hand.status === "playing"
     && !open
     && !held(table)
@@ -572,13 +646,13 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
         seat: open.seat,
         name: open.name,
         openedAt: open.openedAt,
-        youVoted: Object.prototype.hasOwnProperty.call(open.votes, String(me.seat_index)),
+        youVoted: !!me && Object.prototype.hasOwnProperty.call(open.votes, String(me.seat_index)),
       }
     : null;
-  return {
+  return finish({
     ...base,
     hand: hand.hand_number,
-    yourCards: state.hands[me.seat_index].map(formatCard),
+    yourCards: me ? state.hands[me.seat_index].map(formatCard) : [],
     counts: state.hands.map((cards) => cards.length),
     turn: state.status === "playing" ? state.turn : null,
     firstLead: state.firstLead,
@@ -615,7 +689,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
     canUndo,
     undo,
     holding: held(table),
-  };
+  });
 }
 
 async function saveProjection(
@@ -686,6 +760,7 @@ async function saveProjection(
       .update({ status: result.roundOver ? "round_end" : "hand_end" })
       .eq("id", table.id);
     if (tableError) throw new HttpError(500, tableError.message);
+    if (result.roundOver) await clearChat(admin, table.id);
   }
 
   const { error } = await admin.from("hands").update(patch).eq("id", hand.id);
@@ -1100,7 +1175,14 @@ async function act(
   if (undoOf(table) || (!autoLast && !autoPass && !allowHeld && held(table))) throw new HttpError(400, "Wait for the undo vote");
   const seats = await loadSeats(admin, tableId);
   const settings = settingsOf(table);
-  const me = botSeat == null ? requireSeat(seats, userId) : seats.find((seat) => seat.seat_index === botSeat);
+  const seated = seats.find((item) => item.user_id === userId) ?? null;
+  if (botSeat == null && !seated && kind !== "timeout") throw new HttpError(403, "You are not at this table");
+  if (botSeat == null && !seated && kind === "timeout" && !(await viewerRow(admin, tableId, userId))) {
+    throw new HttpError(403, "You are not at this table");
+  }
+  const me = botSeat == null
+    ? (seated ?? { seat_index: -1, display_name: "", is_bot: false, user_id: userId })
+    : seats.find((seat) => seat.seat_index === botSeat);
   if (!me) throw new HttpError(400, "That seat is empty");
   if (botSeat != null && !me.is_bot) throw new HttpError(400, "Only a computer player can be moved this way");
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -1437,10 +1519,64 @@ export async function handleTable(req: Request): Promise<Response> {
     return json({ view: await buildView(admin, table.id, userId) });
   }
 
+  if (action === "watch") {
+    const name = cleanName(body.name);
+    const code = String(body.code ?? "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) throw new HttpError(400, "Enter the 6-character code");
+    const { data: table, error } = await admin.from("game_tables").select("*").eq("code", code).maybeSingle();
+    if (error) throw new HttpError(500, error.message);
+    if (!table) throw new HttpError(404, "No table uses that code");
+    const seats = await loadSeats(admin, table.id);
+    if (seats.some((seat) => seat.user_id === userId)) {
+      const { error: dropError } = await admin.from("table_viewers").delete().eq("table_id", table.id).eq("user_id", userId);
+      if (dropError) throw new HttpError(500, dropError.message);
+      return json({ view: await buildView(admin, table.id, userId) });
+    }
+    if (seats.length < 4 && table.status === "lobby") throw new HttpError(400, "There is still a seat at that table");
+    const existing = await viewerRow(admin, table.id, userId);
+    if (!existing) {
+      const { count, error: countError } = await admin
+        .from("table_viewers")
+        .select("user_id", { count: "exact", head: true })
+        .eq("table_id", table.id);
+      if (countError) throw new HttpError(500, countError.message);
+      if ((count ?? 0) >= VIEWER_CAP) throw new HttpError(400, "Too many people are watching");
+    }
+    const { error: watchError } = await admin.from("table_viewers").upsert({
+      table_id: table.id,
+      user_id: userId,
+      display_name: name,
+      last_seen: new Date().toISOString(),
+    }, { onConflict: "table_id,user_id" });
+    if (watchError) throw new HttpError(500, watchError.message);
+    return json({ view: await buildView(admin, table.id, userId) });
+  }
+
   const tableId = String(body.tableId ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(tableId)) throw new HttpError(400, "Missing table");
 
   if (action === "state" || action === "heartbeat") {
+    return json({ view: await buildView(admin, tableId, userId) });
+  }
+
+  if (action === "chat") {
+    const table = await loadTable(admin, tableId);
+    const seats = await loadSeats(admin, tableId);
+    const seat = seats.find((item) => item.user_id === userId) ?? null;
+    const viewer = seat ? null : await viewerRow(admin, tableId, userId);
+    if (!seat && !viewer) throw new HttpError(403, "You are not at this table");
+    if (table.status === "round_end") throw new HttpError(400, "This game is over");
+    const text = chatText(body.text);
+    if (!text.ok) throw new HttpError(400, text.message);
+    if (viewer) await touchViewer(admin, tableId, userId);
+    const { error } = await admin.from("table_messages").insert({
+      table_id: tableId,
+      round_number: table.round_number,
+      display_name: String(seat?.display_name ?? viewer?.display_name ?? "Player"),
+      viewer: !seat,
+      body: text.text,
+    });
+    if (error) throw new HttpError(500, error.message);
     return json({ view: await buildView(admin, tableId, userId) });
   }
 
@@ -1559,6 +1695,7 @@ export async function handleTable(req: Request): Promise<Response> {
       .select("id");
     if (error) throw new HttpError(500, error.message);
     if (!data || data.length === 0) throw new HttpError(409, "The table changed. Try that again.");
+    await clearChat(admin, tableId);
     return json({ view: await buildView(admin, tableId, userId) });
   }
 

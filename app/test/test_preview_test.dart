@@ -7,7 +7,7 @@ void main() {
     await tester.pumpWidget(const MaterialApp(
       home: TestPreviewOverlay(show: true, child: SizedBox.shrink()),
     ));
-    expect(find.text("TEST VERSION · v1.4"), findsOneWidget);
+    expect(find.text("TEST VERSION · v1.5"), findsOneWidget);
 
     await tester.pumpWidget(const MaterialApp(
       home: TestPreviewOverlay(show: false, child: Text("live")),

@@ -20,10 +20,10 @@ The house rules are in [RULES.md](RULES.md).
 | `app/public-client.json` | Public Supabase URL and publishable key. The Pages workflow passes this to the web build. |
 | `supabase/functions/_shared/rules/` | The same rules in TypeScript. Edge Functions play the hand from this code. |
 | `supabase/functions/` | `table`, `deal`, `play`, `pass`, `tick`, `ping`, and `home`. |
-| `supabase/migrations/` | `001_init.sql` tables and row-level security, `002_reorder_seats.sql` seating, `003_webhook_log.sql` score delivery. |
+| `supabase/migrations/` | `001_init.sql` tables and row-level security, `002_reorder_seats.sql` seating, `003_webhook_log.sql` score delivery, `004_bots_and_webhook_claim.sql` computer players, `005_viewers_and_chat.sql` watching and table chat. |
 | `rules/test/rules.test.ts` | Node tests for the TypeScript rules. |
 | `.github/workflows/pages.yml` | Builds the web app from source and publishes `gh-pages`, leaving the `test/` folder in place. |
-| `.github/workflows/test-preview.yml` | Builds `v1.4-dev` into `gh-pages/test/` only. |
+| `.github/workflows/test-preview.yml` | Builds `v1.5-dev` into `gh-pages/test/` only. |
 | `.github/workflows/keep-awake.yml` | Pings Supabase on Sunday and Wednesday. |
 
 The Dart and TypeScript engines are two copies. If you change a rule, change both, then run both test suites.
@@ -99,7 +99,7 @@ A push to `main` runs **Publish the web app** (`.github/workflows/pages.yml`). I
 
 `gh-pages` is what [https://tuen.github.io/big-two/](https://tuen.github.io/big-two/) serves. `main` holds the source.
 
-A push to `v1.4-dev` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish.
+A push to `v1.5-dev` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish.
 
 On an iPhone or iPad: open the site in Safari, Share, **Add to Home Screen**, then launch **Big Two** from the icon.
 
@@ -129,6 +129,10 @@ Settings, with the defaults:
 - Score dates use `Australia/Melbourne`. The host can pick Sydney, Brisbane, Adelaide, Perth, Auckland, or UTC.
 
 In the lobby the host can shuffle seats, move a player up or down, and rename a seated player. A name is at most 24 characters.
+
+If the table already has four players, **Join** offers **Watch this game**. A viewer sees the cards that have been played, each player's count, and the scores. They never see a hand. They cannot play, pass, or vote on undo, and they are not one of the four players, so they do not change the score. The table shows **Watching** and how many people are watching.
+
+**Chat** is for that table. Players and viewers can both use it. A viewer's name is marked as a viewer. A message is at most 200 characters. Hide the chat so it does not cover the cards; a small badge shows new messages while it is hidden. The chat clears when the round ends.
 
 The host can also fill an empty seat with a computer player: Easy, Normal, or Hard. Normal is the default. The seat is named Bot Ruby, Bot Jade, Bot Pearl, or Bot Amber, and the table shows a robot badge. One to three humans can play with the rest filled by bots, including one human and three bots. Bots are seated players on the server. They use the same rules, see only their own cards, the cards played so far, and the other players' counts, and they take about a second to move. A later tick finishes a bot turn if the previous request stopped. A hand with any bot is still scored normally. The scoreboard says **Practice (computer players)**. Play on this device does not add bots and does not POST the webhook.
 

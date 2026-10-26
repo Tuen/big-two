@@ -54,6 +54,8 @@ class TableView extends StatefulWidget {
   final VoidCallback onSortRank;
   final VoidCallback onSortSuit;
   final VoidCallback onScores;
+  final int chatUnread;
+  final VoidCallback? onChat;
   final ValueChanged<String> onToggle;
   final void Function(int from, int to) onReorder;
 
@@ -90,6 +92,8 @@ class TableView extends StatefulWidget {
     required this.onSortRank,
     required this.onSortSuit,
     required this.onScores,
+    this.chatUnread = 0,
+    this.onChat,
     required this.onToggle,
     required this.onReorder,
   });
@@ -444,6 +448,18 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
                   TextButton(style: buttonStyle, onPressed: widget.onSortRank, child: Text("Sort rank", style: TextStyle(color: Colors.white, fontSize: size))),
                   TextButton(style: buttonStyle, onPressed: widget.onSortSuit, child: Text("Sort suit", style: TextStyle(color: Colors.white, fontSize: size))),
                   TextButton(style: buttonStyle, onPressed: widget.onScores, child: Text("Scores", style: TextStyle(color: gold, fontSize: compact ? 14 : 17, fontWeight: FontWeight.w800))),
+                  if (widget.onChat != null)
+                    Badge(
+                      isLabelVisible: widget.chatUnread > 0,
+                      label: Text("${widget.chatUnread}"),
+                      child: IconButton(
+                        key: const Key("chat-button"),
+                        tooltip: "Chat",
+                        style: iconStyle,
+                        onPressed: widget.onChat,
+                        icon: const Icon(Icons.chat_bubble_outline, color: Colors.white, size: 22),
+                      ),
+                    ),
                   IconButton(
                     tooltip: widget.soundOn ? "Mute sounds" : "Turn sounds on",
                     style: iconStyle,
