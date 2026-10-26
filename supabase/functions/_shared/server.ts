@@ -159,8 +159,9 @@ function rulesV13(table: Row): boolean {
   return table.settings?.v13 === true;
 }
 
-function rulesV14(table: Row): boolean {
-  return table.settings?.v14 === true;
+/** v1.4 pass rules apply to every table, including ones opened from the live page. */
+function rulesV14(_table: Row): boolean {
+  return true;
 }
 
 function storedSettings(value: unknown, previous?: Row): Row {
