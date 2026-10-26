@@ -1406,8 +1406,8 @@ async function act(
 }
 
 const BOT_NAMES = ["Bot Ruby", "Bot Jade", "Bot Pearl", "Bot Amber"];
-const BOT_LOOP = 16;
-const BOT_SLEEP_BUDGET = 8_000;
+const BOT_LOOP = 1;
+const BOT_SLEEP_BUDGET = 3_000;
 
 function botNames(seats: Row[]): string[] {
   return seats

@@ -365,7 +365,7 @@ class _OnlinePageState extends State<OnlinePage> {
     final turn = next.turn;
     if (turn == null || turn == next.you || turn < 0 || turn >= next.seats.length) return;
     if (!next.seats[turn].isBot) return;
-    _botTimer = Timer(const Duration(milliseconds: 1500), () {
+    _botTimer = Timer(const Duration(milliseconds: 800), () {
       if (mounted && _view?.undo == null) _refresh();
     });
   }
