@@ -68,18 +68,8 @@ export class HttpError extends Error {
   }
 }
 
-const marks: { k: string; ms: number }[] = [];
-let markStart = 0;
-
-function mark(k: string) {
-  marks.push({ k, ms: Date.now() - markStart });
-}
-
 export function json(body: unknown, status = 200): Response {
-  const payload = body && typeof body === "object" && !Array.isArray(body) && marks.length
-    ? { ...(body as Record<string, unknown>), trace: marks.slice() }
-    : body;
-  return new Response(JSON.stringify(payload), {
+  return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
@@ -88,9 +78,6 @@ export function json(body: unknown, status = 200): Response {
 export function serveAction(action: (req: Request) => Promise<Response>): void {
   Deno.serve(async (req) => {
     if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-    marks.length = 0;
-    markStart = Date.now();
-    mark("in");
     try {
       return await action(req);
     } catch (error) {
@@ -121,7 +108,6 @@ async function requireUser(req: Request): Promise<string> {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const { data, error } = await client.auth.getUser();
-  mark("user");
   if (error || !data.user) throw new HttpError(401, "Sign in first");
   return data.user.id;
 }
@@ -635,11 +621,9 @@ function resultJson(row: Row) {
 }
 
 export async function buildView(admin: SupabaseClient, tableId: string, userId: string) {
-  mark("view");
   const seen = touch(admin, tableId, userId);
   let bundle = await loadBundle(admin, tableId);
   await seen;
-  mark("view-bundle");
   let table = bundle.table;
   if (undoOf(table) || (table.settings?.hold && !held(table))) {
     await clearStaleHold(admin, table);
@@ -1327,9 +1311,7 @@ async function act(
   expectSeat?: number,
   seeded?: Bundle,
 ): Promise<boolean> {
-  mark("act-in");
   let bundle = seeded ?? await loadBundle(admin, tableId);
-  mark("act-bundle");
   let table = bundle.table;
   if (undoOf(table) || (table.settings?.hold && !held(table))) {
     await clearStaleHold(admin, table);
@@ -1414,7 +1396,6 @@ async function act(
           cards: heldCards.map(formatCard),
         })),
       });
-      mark("act-saved");
       if (error) {
         if (String(error.code) === "23505" && (kind === "timeout" || autoPass)) {
           await traceMove(
@@ -1446,7 +1427,6 @@ async function act(
       kind,
       payload: { cards: kind === "play" ? step.state.trickCards : [] },
     });
-    mark("act-inserted");
     if (error) {
       if (String(error.code) === "23505" && (kind === "timeout" || autoPass)) {
         await traceMove(
@@ -1467,7 +1447,6 @@ async function act(
     let swept = false;
     try {
       await saveProjection(admin, table, hand, seats, { ...step, message: shown }, played.deckText);
-      mark("act-saved");
       if (autoPass) {
         await traceMove(admin, table, hand, String(me.display_name ?? ""), "auto-pass", played.step.state.trickCards.join(" "), "no legal play");
       }
@@ -1547,7 +1526,6 @@ function botWaiting(table: Row, now = Date.now()): boolean {
 async function runBots(admin: SupabaseClient, tableId: string, seeded?: Bundle): Promise<void> {
   try {
     const first = seeded ?? await loadBundle(admin, tableId);
-    mark("bot-bundle");
     if (botWaiting(first.table)) return;
     if (first.table.settings?.botWaitUntil) {
       await patchSetting(admin, tableId, "botWaitUntil", null, null);
@@ -1591,7 +1569,6 @@ async function runBots(admin: SupabaseClient, tableId: string, seeded?: Bundle):
       },
       locked: state.locked,
     });
-    mark("bot-chosen");
     try {
       const swept = await act(
         admin,
@@ -1914,7 +1891,6 @@ export async function handleDeal(req: Request): Promise<Response> {
   const table = await loadTable(admin, tableId);
   const seats = await loadSeats(admin, tableId);
   await dealHand(admin, table, seats, userId);
-  mark("deal-done");
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -1925,7 +1901,6 @@ export async function handlePlay(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "play", cards);
-  mark("play-acted");
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -1944,7 +1919,6 @@ export async function handleTick(req: Request): Promise<Response> {
   const tableId = String(body.tableId ?? "");
   const admin = adminClient();
   const bundle0 = await loadBundle(admin, tableId);
-  mark("tick-bundle");
   let bundle = bundle0;
   let table = bundle.table;
   const dirty = Boolean(undoOf(table)) || Boolean(table.settings?.hold && !held(table));
