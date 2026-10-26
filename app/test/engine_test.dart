@@ -727,7 +727,7 @@ void main() {
     expect(passedLead.state.turn, 1);
     expect(passedLead.state.trick, isNull);
     final nextLead = applyPlay(passedLead.state, 1, ["4C"], settings);
-    expect(nextLead.ok, isTrue);
+    expect(nextLead, isA<StepOk>());
 
     final twoTwos = makeState(hands: [parseCards(["2H", "2D"]), ...others], turn: 0);
     expect(stuckOnTwos(twoTwos, 0, settings), isFalse);
