@@ -663,4 +663,60 @@ void main() {
     expect(won.state.status, "complete");
     expect(won.state.winner, 0);
   });
+
+  test("a follower with no legal play is an auto-pass, and a leader is not", () {
+    final others = [parseCards(["9C", "4C"]), parseCards(["6H", "7H"]), parseCards(["8D", "TD"])];
+    final pair = makeState(
+      hands: [parseCards(["3D", "4C", "5H", "6S", "9C"]), ...others],
+      turn: 0,
+      trick: mustCombo(["8C", "8D"]),
+      trickSeat: 3,
+      trickCards: ["8C", "8D"],
+    );
+    expect(shouldAutoPass(pair, 0, settings), isTrue);
+    expect(legalSelections(pair, 0, settings), isEmpty);
+
+    final straight = makeState(
+      hands: [parseCards(["JH", "QD", "KC", "AS", "2C"]), ...others],
+      turn: 0,
+      trick: mustCombo(["3C", "4D", "5H", "6S", "7C"]),
+      trickSeat: 1,
+      trickCards: ["3C", "4D", "5H", "6S", "7C"],
+    );
+    expect(shouldAutoPass(straight, 0, settings), isFalse);
+    expect(playIssue(straight, 0, parseCards(["JH", "QD", "KC", "AS", "2C"]), settings), isNull);
+
+    final wrapped = makeState(
+      hands: [parseCards(["AH", "2D", "3C", "4S", "5H"]), ...others],
+      turn: 0,
+      trick: mustCombo(["9C", "9D"]),
+      trickSeat: 2,
+      trickCards: ["9C", "9D"],
+    );
+    expect(identify(parseCards(["AH", "2D", "3C", "4S", "5H"])), isNull);
+    expect(shouldAutoPass(wrapped, 0, settings), isTrue);
+
+    final lead = makeState(hands: [parseCards(["2S", "2H"]), ...others], turn: 0);
+    expect(shouldAutoPass(lead, 0, settings), isFalse);
+
+    final onlyTwo = makeState(
+      hands: [parseCards(["2H"]), ...others],
+      turn: 0,
+      trick: mustCombo(["5D"]),
+      trickSeat: 1,
+      trickCards: ["5D"],
+    );
+    expect(automaticLastCard(onlyTwo, 0, settings), isNull);
+    expect(shouldAutoPass(onlyTwo, 0, settings), isTrue);
+
+    final forced = makeState(
+      hands: [parseCards(["3C", "AS"]), parseCards(["QS"]), parseCards(["4C", "5C"]), parseCards(["6D", "7D"])],
+      turn: 0,
+      trick: mustCombo(["5D"]),
+      trickSeat: 3,
+      trickCards: ["5D"],
+    );
+    expect(mustPlayHighestSingle(forced, 0, settings), isTrue);
+    expect(shouldAutoPass(forced, 0, settings), isFalse);
+  });
 }

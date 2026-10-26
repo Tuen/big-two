@@ -23,7 +23,7 @@ The house rules are in [RULES.md](RULES.md).
 | `supabase/migrations/` | `001_init.sql` tables and row-level security, `002_reorder_seats.sql` seating, `003_webhook_log.sql` score delivery. |
 | `rules/test/rules.test.ts` | Node tests for the TypeScript rules. |
 | `.github/workflows/pages.yml` | Builds the web app from source and publishes `gh-pages`, leaving the `test/` folder in place. |
-| `.github/workflows/test-preview.yml` | Builds `v1.1-dev` into `gh-pages/test/` only. |
+| `.github/workflows/test-preview.yml` | Builds `v1.4-dev` into `gh-pages/test/` only. |
 | `.github/workflows/keep-awake.yml` | Pings Supabase on Sunday and Wednesday. |
 
 The Dart and TypeScript engines are two copies. If you change a rule, change both, then run both test suites.
@@ -99,7 +99,7 @@ A push to `main` runs **Publish the web app** (`.github/workflows/pages.yml`). I
 
 `gh-pages` is what [https://tuen.github.io/big-two/](https://tuen.github.io/big-two/) serves. `main` holds the source.
 
-A push to `v1.1-dev` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish.
+A push to `v1.4-dev` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish.
 
 On an iPhone or iPad: open the site in Safari, Share, **Add to Home Screen**, then launch **Big Two** from the icon.
 

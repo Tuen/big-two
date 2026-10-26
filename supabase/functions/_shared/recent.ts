@@ -3,10 +3,13 @@ import {
   applyPass,
   applyPlay,
   applyTimeout,
+  NO_PLAY_MESSAGE,
+  shouldAutoPass,
   startHand,
   type Settings,
   type Step,
 } from "./rules/game.ts";
+import { isLoneTwoOfSpades } from "./undo.ts";
 
 /** One public action from the current hand. Played cards are already public. */
 export interface RecentAction {
@@ -50,6 +53,9 @@ export function recentActions(
     if (!step.ok || step.state.status !== "playing") break;
     const seat = event.seat;
     const before = step.state.hands[seat]?.length ?? 0;
+    const noPlay = event.kind === "pass"
+      && shouldAutoPass(step.state, seat, settings)
+      && !isLoneTwoOfSpades(step.state.trickCards);
     if (event.kind === "play") step = applyPlay(step.state, seat, event.cards ?? [], settings);
     else if (event.kind === "timeout") step = applyTimeout(step.state, settings);
     else step = applyPass(step.state, seat, settings);
@@ -61,7 +67,7 @@ export function recentActions(
       seat,
       kind: played ? "play" : "pass",
       cards: played ? [...after.trickCards] : [],
-      label: played ? after.trick?.label ?? "Play" : "Pass",
+      label: played ? after.trick?.label ?? "Play" : noPlay ? NO_PLAY_MESSAGE : "Pass",
     });
   }
   return rows.slice(-RECENT_LIMIT);

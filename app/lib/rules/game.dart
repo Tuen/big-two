@@ -301,6 +301,17 @@ String? automaticLastCard(HandState state, int seat, Settings settings) {
   return formatCard(hand.first);
 }
 
+const noPlayMessage = "No play – auto pass";
+
+/// True when this seat is following and nothing they hold is a legal play.
+/// A new lead is never an auto-pass, even when the only cards are 2s.
+bool shouldAutoPass(HandState state, int seat, Settings settings) {
+  if (state.status != "playing" || state.turn != seat) return false;
+  if (state.trick == null) return false;
+  if (passIssue(state, seat, settings) != null) return false;
+  return legalSelections(state, seat, settings).isEmpty;
+}
+
 String? passIssue(HandState state, int seat, Settings settings) {
   if (state.status != "playing") return "This hand is over";
   if (seat != state.turn) return "Not your turn";

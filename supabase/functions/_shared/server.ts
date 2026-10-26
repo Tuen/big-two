@@ -5,10 +5,14 @@ import {
   applyPass,
   applyPlay,
   applyTimeout,
+  AUTO_PASS_WAIT_MS,
   automaticLastCard,
   lastCardMessage,
+  NO_PLAY_MESSAGE,
   replay,
   roundWinners,
+  serverAutomatic,
+  shouldAutoPass,
   type ReplayEvent,
   type Settings,
   type StepOk,
@@ -153,15 +157,21 @@ function rulesV13(table: Row): boolean {
   return table.settings?.v13 === true;
 }
 
+function rulesV14(table: Row): boolean {
+  return table.settings?.v14 === true;
+}
+
 function storedSettings(value: unknown, previous?: Row): Row {
   const cleaned = cleanSettings(value, previous ? settingsOf(previous) : DEFAULT_SETTINGS);
   const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const v13 = raw.v13 === true || previous?.settings?.v13 === true;
+  const v14 = raw.v14 === true || previous?.settings?.v14 === true;
   const undo = previous?.settings?.undo;
   const hold = previous?.settings?.hold;
   return {
     ...cleaned,
     ...(v13 ? { v13: true } : {}),
+    ...(v14 ? { v14: true } : {}),
     ...(undo ? { undo } : {}),
     ...(hold ? { hold } : {}),
   };
@@ -243,6 +253,7 @@ async function revertMove(admin: SupabaseClient, table: Row, hand: Row, seq: num
   await saveProjection(admin, table, hand, seats, replayed.step, replayed.deckText);
   await admin.from("hands").update({ last_message: MOVE_UNDONE }).eq("id", hand.id);
   await maybeAutoLastCard(admin, table.id);
+  await maybeAutoPass(admin, table.id);
 }
 
 async function openUndo(admin: SupabaseClient, table: Row, seats: Row[], me: Row): Promise<void> {
@@ -938,6 +949,71 @@ async function resumeAutomaticLastCard(admin: SupabaseClient, tableId: string): 
     console.error(error);
   }
 }
+
+/** Pass the current seat after the wait, then follow the chain. The phone does not choose this. */
+async function autoPassCurrent(admin: SupabaseClient, tableId: string, wait: boolean, depth: number): Promise<void> {
+  if (wait) await new Promise((resolve) => setTimeout(resolve, AUTO_PASS_WAIT_MS));
+  const table = await loadTable(admin, tableId);
+  if (!rulesV14(table) || undoOf(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  const state = played.step.state;
+  if (serverAutomatic(state, settingsOf(table))?.kind !== "pass") return;
+  const seats = await loadSeats(admin, tableId);
+  const who = seats.find((item) => item.seat_index === state.turn);
+  if (!who) return;
+  await act(
+    admin,
+    tableId,
+    who.user_id,
+    "pass",
+    [],
+    who.is_bot ? who.seat_index : undefined,
+    false,
+    true,
+    depth,
+  );
+}
+
+async function maybeAutoPass(admin: SupabaseClient, tableId: string): Promise<void> {
+  const table = await loadTable(admin, tableId);
+  if (!rulesV14(table) || undoOf(table) || held(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  if (serverAutomatic(played.step.state, settingsOf(table))?.kind !== "pass") return;
+  await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+  try {
+    await autoPassCurrent(admin, tableId, true, 1);
+  } catch (error) {
+    console.error(error);
+  } finally {
+    const fresh = await loadTable(admin, tableId);
+    if (fresh.settings?.hold) await setHold(admin, fresh, null);
+  }
+}
+
+async function resumeAutoPass(admin: SupabaseClient, tableId: string): Promise<void> {
+  const table = await loadTable(admin, tableId);
+  if (!rulesV14(table) || undoOf(table) || held(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const started = Date.parse(String(hand.turn_started_at ?? ""));
+  if (!Number.isFinite(started) || Date.now() - started < AUTO_PASS_WAIT_MS) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  if (serverAutomatic(played.step.state, settingsOf(table))?.kind !== "pass") return;
+  await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+  try {
+    await autoPassCurrent(admin, tableId, false, 1);
+  } catch (error) {
+    console.error(error);
+  } finally {
+    const fresh = await loadTable(admin, tableId);
+    if (fresh.settings?.hold) await setHold(admin, fresh, null);
+  }
+}
+
 async function act(
   admin: SupabaseClient,
   tableId: string,
@@ -946,12 +1022,14 @@ async function act(
   cards: string[],
   botSeat?: number,
   autoLast = false,
+  autoPass = false,
+  depth = 0,
 ): Promise<boolean> {
   let table = await loadTable(admin, tableId);
   await clearStaleHold(admin, table);
   await settleUndo(admin, table);
   table = await loadTable(admin, tableId);
-  if (!autoLast && (undoOf(table) || held(table))) throw new HttpError(400, "Wait for the undo vote");
+  if (undoOf(table) || (!autoLast && !autoPass && held(table))) throw new HttpError(400, "Wait for the undo vote");
   const seats = await loadSeats(admin, tableId);
   const settings = settingsOf(table);
   const me = botSeat == null ? requireSeat(seats, userId) : seats.find((seat) => seat.seat_index === botSeat);
@@ -985,13 +1063,19 @@ async function act(
       && rulesV13(table)
       && step.state.status === "playing"
       && isLoneTwoOfSpades(step.state.trickCards);
-    const nextCard = !autoLast && !sweep && rulesV13(table) && step.state.status === "playing"
-      ? automaticLastCard(step.state, step.state.turn, settings)
-      : null;
-    if (sweep || nextCard) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+    const auto = !sweep && step.state.status === "playing" ? serverAutomatic(step.state, settings) : null;
+    const nextCard = !autoLast && !sweep && rulesV13(table) && auto?.kind === "last-card" ? auto.card : null;
+    const nextPass = !sweep && nextCard == null && rulesV14(table) && auto?.kind === "pass" && depth < 3;
+    if (sweep || nextCard || nextPass) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
     let swept = false;
     try {
-      const shown = autoLast ? lastCardMessage(String(me.display_name ?? "")) : step.message;
+      const noPlay = autoPass || (kind === "pass" && shouldAutoPass(played.step.state, seat, settings));
+      const loneTwo = isLoneTwoOfSpades(played.step.state.trickCards);
+      const shown = autoLast
+        ? lastCardMessage(String(me.display_name ?? ""))
+        : noPlay && !loneTwo
+        ? NO_PLAY_MESSAGE
+        : step.message;
       await saveProjection(admin, table, hand, seats, { ...step, message: shown }, played.deckText);
       if (sweep) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -1021,8 +1105,18 @@ async function act(
         const fresh = await loadTable(admin, tableId);
         if (fresh.settings?.hold) await setHold(admin, fresh, null);
       }
+    } else if (nextPass) {
+      try {
+        await autoPassCurrent(admin, tableId, true, depth + 1);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        const fresh = await loadTable(admin, tableId);
+        if (fresh.settings?.hold) await setHold(admin, fresh, null);
+      }
     } else if (swept) {
       await maybeAutoLastCard(admin, tableId);
+      await maybeAutoPass(admin, tableId);
     }
     return swept;
   }
@@ -1095,6 +1189,7 @@ async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
       if (state.status !== "playing") return;
       if (held(table) || undoOf(table)) return;
       if (rulesV13(table) && automaticLastCard(state, state.turn, settings)) return;
+      if (rulesV14(table) && serverAutomatic(state, settings)?.kind === "pass") return;
       const seat = seats.find((item) => item.seat_index === state.turn);
       if (!seat?.is_bot) return;
 
@@ -1442,6 +1537,7 @@ export async function handleTick(req: Request): Promise<Response> {
     return json({ view: await buildView(admin, tableId, userId) });
   }
   await resumeAutomaticLastCard(admin, tableId);
+  await resumeAutoPass(admin, tableId);
   hand = await latestHand(admin, tableId);
   if (hand?.status === "playing") {
     const played = await replayHand(admin, hand, settings);

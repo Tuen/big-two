@@ -2,6 +2,7 @@ import "dart:async";
 
 import "package:big_two/online/action_reel.dart";
 import "package:big_two/online/game_api.dart";
+import "package:big_two/online/selection.dart";
 import "package:big_two/online/snapshot.dart";
 import "package:big_two/rules/cards.dart";
 import "package:big_two/rules/combo.dart";
@@ -59,6 +60,8 @@ class _OnlinePageState extends State<OnlinePage> {
   Timer? _undoTimer;
   Timer? _sweepTimer;
   Timer? _botTimer;
+  Timer? _noPlay;
+  String? _noPlayCue;
   bool _undoDialog = false;
   String? _undoShown;
   DialogRoute<bool>? _undoRoute;
@@ -94,6 +97,7 @@ class _OnlinePageState extends State<OnlinePage> {
     _undoTimer?.cancel();
     _sweepTimer?.cancel();
     _botTimer?.cancel();
+    _noPlay?.cancel();
     _channel?.unsubscribe();
     super.dispose();
   }
@@ -165,15 +169,20 @@ class _OnlinePageState extends State<OnlinePage> {
 
   void _accept(TableSnapshot next) {
     final previous = _view;
-    final changed = previous == null || previous.hand != next.hand || previous.yourCards.join(",") != next.yourCards.join(",");
+    final newHand = previous == null || previous.round != next.round || previous.hand != next.hand;
+    final cardsChanged = previous == null || previous.yourCards.join(",") != next.yourCards.join(",");
+    final trickWon = previous != null && previous.trick != null && next.trick == null && !newHand;
+    final handEnded = previous != null && previous.status == "playing" && next.status != "playing";
     _view = next;
     _error = null;
-    if (changed) {
-      _selected.clear();
+    if (newHand || cardsChanged) {
       _order = sortCards(parseCards(next.yourCards), "rank").map(formatCard).toList();
     } else {
       final ids = next.yourCards.toSet();
       _order = [..._order.where(ids.contains), ...next.yourCards.where((id) => !_order.contains(id))];
+    }
+    if (dropSelection(newHand: newHand, cardsChanged: cardsChanged, trickWon: trickWon, handEnded: handEnded)) {
+      _selected.clear();
     }
     _syncReel(previous, next);
     _followUp(next);
@@ -183,6 +192,7 @@ class _OnlinePageState extends State<OnlinePage> {
     _armUndoClock(next);
     _armTwoSpades(next);
     _armBots(next);
+    _armNoPlay(next);
     final undo = next.undo;
     if (undo == null) {
       _undoShown = null;
@@ -209,6 +219,25 @@ class _OnlinePageState extends State<OnlinePage> {
     if (opened == null) return;
     final wait = opened.add(const Duration(seconds: 30, milliseconds: 600)).difference(DateTime.now());
     _undoTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
+      if (mounted) _refresh();
+    });
+  }
+
+  void _armNoPlay(TableSnapshot next) {
+    final token = "${next.round}:${next.hand}:${next.turnStartedAt}";
+    if (next.undo != null || next.holding || next.status != "playing" || next.turn != next.you) {
+      _noPlay?.cancel();
+      return;
+    }
+    final local = _local(next);
+    if (local == null || !shouldAutoPass(local, next.you, next.settings)) {
+      _noPlay?.cancel();
+      return;
+    }
+    if (_noPlayCue == token) return;
+    _noPlayCue = token;
+    _noPlay?.cancel();
+    _noPlay = Timer(const Duration(milliseconds: 1200), () {
       if (mounted) _refresh();
     });
   }
@@ -418,6 +447,7 @@ class _OnlinePageState extends State<OnlinePage> {
         "timezone": settings.timezone,
         "firstRoundNumber": settings.firstRoundNumber,
         "v13": true,
+        "v14": true,
       };
 
   HandState? _local(TableSnapshot view) {
@@ -805,7 +835,7 @@ class _OnlinePageState extends State<OnlinePage> {
         dealToken: _dealToken,
         soundOn: _sound,
         onToggleSound: _toggleSound,
-        canPlay: mine && issue == null && !paused,
+        canPlay: canPressPlay(yourTurn: mine, paused: paused, issue: issue),
         canPass: mayPass && !paused,
         canUndo: view.canUndo && !paused,
         passLabel: stuck ? "Pass lead" : "Pass",
@@ -826,7 +856,7 @@ class _OnlinePageState extends State<OnlinePage> {
         onSortRank: () => setState(() => _order = sortCards(parseCards(view.yourCards), "rank").map(formatCard).toList()),
         onSortSuit: () => setState(() => _order = sortCards(parseCards(view.yourCards), "suit").map(formatCard).toList()),
         onScores: () => _scores(view),
-        onToggle: mine && !paused
+        onToggle: view.status == "playing"
             ? (id) => setState(() {
                 if (!_selected.add(id)) _selected.remove(id);
               })
@@ -840,7 +870,8 @@ class _OnlinePageState extends State<OnlinePage> {
   }
 
   bool _everyoneSees(String message) {
-    return message == "Undo rejected" ||
+    return message == noPlayMessage ||
+        message == "Undo rejected" ||
         message == "Move undone" ||
         message == "2♠ – everyone passes" ||
         message.endsWith("wants to undo their last move") ||

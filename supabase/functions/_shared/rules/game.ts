@@ -83,6 +83,12 @@ export const TWO_ON_TABLE_NOTE =
 export const CANNOT_BEAT_NOTE =
   "Your highest card can't beat this single. You may pass.";
 
+/** Shown to the whole table when the server passes a player who has no legal play. */
+export const NO_PLAY_MESSAGE = "No play – auto pass";
+
+/** How long the server waits, after the turn starts, before that automatic pass. */
+export const AUTO_PASS_WAIT_MS = 1000;
+
 export function nextSeat(seat: number): number {
   return (seat + 1) % 4;
 }
@@ -283,6 +289,36 @@ export function automaticLastCard(state: HandState, seat: number, settings: Sett
   if (!hand || hand.length !== 1) return null;
   if (playIssue(state, seat, hand, settings) !== null) return null;
   return formatCard(hand[0]);
+}
+
+/**
+ * True when this seat is following a trick and no subset of their hand is a legal play.
+ * Uses legalSelections, which uses playIssue, so straights, finishing on 2s only,
+ * and the one-card highest-single rule are the same checks as a tapped Play.
+ * Never true on a new lead, even when the only cards are 2s.
+ */
+export function shouldAutoPass(state: HandState, seat: number, settings: Settings): boolean {
+  if (state.status !== "playing" || state.turn !== seat) return false;
+  if (state.trick === null) return false;
+  if (passIssue(state, seat, settings) !== null) return false;
+  return legalSelections(state, seat, settings).length === 0;
+}
+
+export type ServerAutomatic =
+  | { kind: "last-card"; card: string }
+  | { kind: "pass"; message: string; waitMs: number };
+
+/**
+ * What the server may do without a phone asking.
+ * A last card is played. A follower with no legal play is passed.
+ * A leader is left alone. There is no client flag that can force either.
+ */
+export function serverAutomatic(state: HandState, settings: Settings): ServerAutomatic | null {
+  if (state.status !== "playing") return null;
+  const card = automaticLastCard(state, state.turn, settings);
+  if (card) return { kind: "last-card", card };
+  if (!shouldAutoPass(state, state.turn, settings)) return null;
+  return { kind: "pass", message: NO_PLAY_MESSAGE, waitMs: AUTO_PASS_WAIT_MS };
 }
 
 /** Null when a pass is legal. */
