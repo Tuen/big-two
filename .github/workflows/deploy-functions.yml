@@ -38,6 +38,7 @@ jobs:
           import json, os, urllib.request
           sql = open("supabase/migrations/005_viewers_and_chat.sql", encoding="utf-8").read()
           sql += "\n" + open("supabase/migrations/006_pause_and_move_log.sql", encoding="utf-8").read()
+          sql += "\n" + open("supabase/migrations/007_fast_table_read.sql", encoding="utf-8").read()
           request = urllib.request.Request(
               "https://api.supabase.com/v1/projects/ascorkeijzrpmfykpcrb/database/query",
               data=json.dumps({"query": sql}).encode(),

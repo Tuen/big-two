@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { chooseMove, type Difficulty } from "./bots/choose.ts";
-import { formatCard, parseCards, type Card } from "./rules/cards.ts";
+import { formatCard, parseCards } from "./rules/cards.ts";
 import {
   applyPass,
   applyPlay,
@@ -534,25 +534,72 @@ async function latestHand(admin: SupabaseClient, tableId: string): Promise<Row |
   return data;
 }
 
-async function replayHand(admin: SupabaseClient, hand: Row, settings: Settings) {
-  const { data: secret, error } = await admin.from("hand_secrets").select("deck").eq("hand_id", hand.id).single();
+type Bundle = {
+  table: Row;
+  seats: Row[];
+  hand: Row | null;
+  secret: string | null;
+  events: Row[];
+  viewers: { user_id?: string; last_seen: string }[];
+  messages: Row[];
+  results: Row[];
+};
+
+async function loadBundle(admin: SupabaseClient, tableId: string): Promise<Bundle> {
+  const { data, error } = await admin.rpc("load_table_bundle", { p_table: tableId });
   if (error) throw new HttpError(500, error.message);
-  const events = await must(
-    admin.from("events").select("seq, seat_index, kind, payload").eq("hand_id", hand.id).order("seq"),
-  );
-  const deck = parseCards(String(secret.deck).split(","));
-  const log: ReplayEvent[] = (events as Row[]).map((event) => ({
+  const raw = (typeof data === "string" ? JSON.parse(data) : data ?? {}) as Row;
+  if (!raw.table) throw new HttpError(404, "That table does not exist");
+  return {
+    table: raw.table,
+    seats: Array.isArray(raw.seats) ? raw.seats : [],
+    hand: raw.hand ?? null,
+    secret: raw.secret == null ? null : String(raw.secret),
+    events: Array.isArray(raw.events) ? raw.events : [],
+    viewers: Array.isArray(raw.viewers) ? raw.viewers : [],
+    messages: Array.isArray(raw.messages) ? raw.messages : [],
+    results: Array.isArray(raw.results) ? raw.results : [],
+  };
+}
+
+function replayLoaded(hand: Row, secret: string, events: Row[], settings: Settings) {
+  const deck = parseCards(String(secret).split(","));
+  const log: ReplayEvent[] = events.map((event) => ({
     kind: event.kind,
     seat: event.seat_index,
-    cards: event.payload?.cards ?? [],
+    cards: Array.isArray(event.payload?.cards) ? event.payload.cards : [],
   }));
   const step = replay(deck, hand.running_at_start, hand.first_hand, hand.previous_winner, log, settings);
   if (!step.ok) throw new HttpError(500, step.message);
-  return { step, eventCount: log.length, deckText: String(secret.deck), events: events as Row[] };
+  return { step, eventCount: log.length, deckText: String(secret), events };
+}
+
+async function replayHand(admin: SupabaseClient, hand: Row, settings: Settings) {
+  const [secretRes, events] = await Promise.all([
+    admin.from("hand_secrets").select("deck").eq("hand_id", hand.id).single(),
+    must(admin.from("events").select("seq, seat_index, kind, payload").eq("hand_id", hand.id).order("seq")),
+  ]);
+  if (secretRes.error || !secretRes.data) throw new HttpError(500, secretRes.error?.message ?? "The deal is missing");
+  return replayLoaded(hand, String(secretRes.data.deck), events as Row[], settings);
 }
 
 function connected(seat: Row): boolean {
   return Date.now() - new Date(seat.last_seen).getTime() < 20_000;
+}
+
+function historyFrom(rows: Row[], roundNumber: number) {
+  const history = rows
+    .filter((row) => row.round_number === roundNumber)
+    .map(resultJson);
+  const archive = rows
+    .filter((row) => row.round_over && row.round_number !== roundNumber)
+    .map((row) => ({
+      round: row.round_number,
+      players: row.players,
+      runningTotals: row.running_totals,
+      winners: roundWinners(row.running_totals),
+    }));
+  return { history, archive };
 }
 
 async function historyFor(admin: SupabaseClient, tableId: string, roundNumber: number) {
@@ -564,18 +611,7 @@ async function historyFor(admin: SupabaseClient, tableId: string, roundNumber: n
       .order("round_number")
       .order("hand_number"),
   );
-  const history = (rows as Row[])
-    .filter((row) => row.round_number === roundNumber)
-    .map(resultJson);
-  const archive = (rows as Row[])
-    .filter((row) => row.round_over && row.round_number !== roundNumber)
-    .map((row) => ({
-      round: row.round_number,
-      players: row.players,
-      runningTotals: row.running_totals,
-      winners: roundWinners(row.running_totals),
-    }));
-  return { history, archive };
+  return historyFrom(rows as Row[], roundNumber);
 }
 
 function resultJson(row: Row) {
@@ -600,25 +636,40 @@ function resultJson(row: Row) {
 
 export async function buildView(admin: SupabaseClient, tableId: string, userId: string) {
   mark("view");
-  await touch(admin, tableId, userId);
-  let table = await loadTable(admin, tableId);
-  await clearStaleHold(admin, table);
-  await settleUndo(admin, table);
-  table = await loadTable(admin, tableId);
-  const seats = await loadSeats(admin, tableId);
+  const seen = touch(admin, tableId, userId);
+  let bundle = await loadBundle(admin, tableId);
+  await seen;
+  mark("view-bundle");
+  let table = bundle.table;
+  if (undoOf(table) || (table.settings?.hold && !held(table))) {
+    await clearStaleHold(admin, table);
+    await settleUndo(admin, table);
+    bundle = await loadBundle(admin, tableId);
+    table = bundle.table;
+  }
+  const seats = bundle.seats;
   const me = seats.find((item) => item.user_id === userId) ?? null;
   if (!me) {
-    const viewer = await viewerRow(admin, tableId, userId);
+    const viewer = bundle.viewers.find((item) => item.user_id === userId);
     if (!viewer) throw new HttpError(403, "You are not at this table");
     await touchViewer(admin, tableId, userId);
   }
-  const audience = await audienceOf(admin, table);
+  const lines = bundle.messages.map((row) => ({
+    id: Number(row.id),
+    name: String(row.display_name),
+    viewer: Boolean(row.viewer),
+    text: String(row.body),
+  }));
+  const audience = {
+    viewerCount: freshViewers(bundle.viewers).length,
+    chat: visibleChat(lines, table.status === "round_end"),
+  };
   const watching = me == null;
   const seatIndex = me?.seat_index ?? 0;
   const finish = <T extends Record<string, unknown>>(view: T) => withAudience(view, watching, audience);
   const settings = settingsOf(table);
-  const hand = await latestHand(admin, tableId);
-  const { history, archive } = await historyFor(admin, tableId, table.round_number);
+  const hand = bundle.hand;
+  const { history, archive } = historyFrom(bundle.results, table.round_number);
   const base = {
     tableId: table.id,
     code: table.code,
@@ -634,7 +685,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
         ? {
             seat: index,
             name: seat.display_name,
-            connected: Boolean(seat.is_bot) || connected(seat),
+            connected: Boolean(seat.is_bot) || seat.user_id === userId || connected(seat),
             userId: seat.user_id,
             isBot: Boolean(seat.is_bot),
             difficulty: seat.is_bot ? seat.bot_difficulty : null,
@@ -701,7 +752,8 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
     });
   }
 
-  const { step, deckText, events } = await replayHand(admin, hand, settings);
+  if (!bundle.secret) throw new HttpError(500, "The deal is missing");
+  const { step, deckText, events } = replayLoaded(hand, bundle.secret, bundle.events, settings);
   const state = step.state;
   const score = step.result;
   const names = namesOf(seats).map((name, index) => name ?? `Seat ${index + 1}`);
@@ -853,14 +905,14 @@ async function saveProjection(
 
   const { error } = await admin.from("hands").update(patch).eq("id", hand.id);
   if (error) throw new HttpError(500, error.message);
-  for (let seat = 0; seat < 4; seat++) {
-    const { error: holdingError } = await admin.from("holdings").upsert({
+  const { error: holdingError } = await admin.from("holdings").upsert(
+    [0, 1, 2, 3].map((seat) => ({
       hand_id: hand.id,
       seat_index: seat,
       cards: state.hands[seat].map(formatCard),
-    });
-    if (holdingError) throw new HttpError(500, holdingError.message);
-  }
+    })),
+  );
+  if (holdingError) throw new HttpError(500, holdingError.message);
   if (state.status === "complete") await sendWebhook(admin, hand.id);
 }
 
@@ -1018,7 +1070,7 @@ async function dealHand(admin: SupabaseClient, table: Row, seats: Row[], userId:
     requireSeat(seats, userId);
   }
 
-  const deck: Card[] = shuffleDeck();
+  const deck = shuffleDeck();
   const committed = await commitDeck(deck);
   const { data: hand, error } = await admin
     .from("hands")
@@ -1273,18 +1325,24 @@ async function act(
   depth = 0,
   allowHeld = false,
   expectSeat?: number,
+  seeded?: Bundle,
 ): Promise<boolean> {
   mark("act-in");
-  let table = await loadTable(admin, tableId);
-  await clearStaleHold(admin, table);
-  await settleUndo(admin, table);
-  table = await loadTable(admin, tableId);
+  let bundle = seeded ?? await loadBundle(admin, tableId);
+  mark("act-bundle");
+  let table = bundle.table;
+  if (undoOf(table) || (table.settings?.hold && !held(table))) {
+    await clearStaleHold(admin, table);
+    await settleUndo(admin, table);
+    bundle = await loadBundle(admin, tableId);
+    table = bundle.table;
+  }
   if (undoOf(table) || (!autoLast && !autoPass && !allowHeld && held(table))) throw new HttpError(400, "Wait for the undo vote");
-  const seats = await loadSeats(admin, tableId);
+  const seats = bundle.seats;
   const settings = settingsOf(table);
   const seated = seats.find((item) => item.user_id === userId) ?? null;
   if (botSeat == null && !seated && kind !== "timeout") throw new HttpError(403, "You are not at this table");
-  if (botSeat == null && !seated && kind === "timeout" && !(await viewerRow(admin, tableId, userId))) {
+  if (botSeat == null && !seated && kind === "timeout" && !bundle.viewers.some((item) => item.user_id === userId)) {
     throw new HttpError(403, "You are not at this table");
   }
   const me = botSeat == null
@@ -1293,9 +1351,13 @@ async function act(
   if (!me) throw new HttpError(400, "That seat is empty");
   if (botSeat != null && !me.is_bot) throw new HttpError(400, "Only a computer player can be moved this way");
   for (let attempt = 0; attempt < 3; attempt++) {
-    const hand = await latestHand(admin, tableId);
-    if (!hand || hand.status !== "playing") throw new HttpError(400, "There is no hand to play");
-    const played = await replayHand(admin, hand, settings);
+    if (attempt > 0) {
+      bundle = await loadBundle(admin, tableId);
+      table = bundle.table;
+    }
+    const hand = bundle.hand;
+    if (!hand || hand.status !== "playing" || !bundle.secret) throw new HttpError(400, "There is no hand to play");
+    const played = replayLoaded(hand, bundle.secret, bundle.events, settings);
     if (played.step.state.status !== "playing") throw new HttpError(400, "This hand is over");
     if (kind === "timeout") {
       const timed = expectSeat ?? played.step.state.turn;
@@ -1320,6 +1382,63 @@ async function act(
       : applyTimeout(played.step.state, settings);
     if (!step.ok) throw new HttpError(400, step.message);
     const seat = kind === "timeout" ? played.step.state.turn : me.seat_index;
+    const sweep = kind === "play"
+      && rulesV13(table)
+      && step.state.status === "playing"
+      && isLoneTwoOfSpades(step.state.trickCards);
+    const auto = !sweep && step.state.status === "playing" ? serverAutomatic(step.state, settings) : null;
+    const nextCard = !autoLast && !sweep && rulesV13(table) && auto?.kind === "last-card" ? auto.card : null;
+    const allowPass = passesAutomatically(table, seats);
+    const nextPass = !sweep && nextCard == null && allowPass && auto?.kind === "pass" && depth < 3;
+    const nextStuck = !sweep && nextCard == null && !nextPass && rulesV14(table) && depth < 4
+      && stuckBotTurn(step.state, settings, seats);
+    const noPlay = allowPass && (autoPass || (kind === "pass" && shouldAutoPass(played.step.state, seat, settings)));
+    const loneTwo = isLoneTwoOfSpades(played.step.state.trickCards);
+    const shown = autoLast
+      ? lastCardMessage(String(me.display_name ?? ""))
+      : noPlay && !loneTwo
+      ? NO_PLAY_MESSAGE
+      : step.message;
+    const chain = sweep || nextCard != null || nextPass || nextStuck || step.state.status !== "playing";
+    if (!chain) {
+      const { error } = await admin.rpc("save_playing_move", {
+        p_hand: hand.id,
+        p_seq: played.eventCount + 1,
+        p_seat: seat,
+        p_kind: kind,
+        p_cards: kind === "play" ? step.state.trickCards : [],
+        p_turn: step.state.turn,
+        p_message: shown,
+        p_holdings: step.state.hands.map((heldCards, index) => ({
+          seat: index,
+          cards: heldCards.map(formatCard),
+        })),
+      });
+      mark("act-saved");
+      if (error) {
+        if (String(error.code) === "23505" && (kind === "timeout" || autoPass)) {
+          await traceMove(
+            admin,
+            table,
+            hand,
+            kind === "timeout" ? playerName(seats, expectSeat ?? played.step.state.turn) : String(me.display_name ?? ""),
+            kind === "timeout" ? "timeout" : "auto-pass",
+            played.step.state.trickCards.join(" "),
+            "skipped: two moves clashed",
+          );
+          return false;
+        }
+        if (String(error.code) === "23505" && attempt < 2) continue;
+        throw new HttpError(500, error.message);
+      }
+      if (autoPass) {
+        await traceMove(admin, table, hand, String(me.display_name ?? ""), "auto-pass", played.step.state.trickCards.join(" "), "no legal play");
+      }
+      if (kind === "timeout") {
+        await traceMove(admin, table, hand, playerName(seats, seat), "timeout", played.step.state.trickCards.join(" "), "turn timer");
+      }
+      return false;
+    }
     const { error } = await admin.from("events").insert({
       hand_id: hand.id,
       seq: played.eventCount + 1,
@@ -1344,26 +1463,9 @@ async function act(
       if (String(error.code) === "23505" && attempt < 2) continue;
       throw new HttpError(500, error.message);
     }
-    const sweep = kind === "play"
-      && rulesV13(table)
-      && step.state.status === "playing"
-      && isLoneTwoOfSpades(step.state.trickCards);
-    const auto = !sweep && step.state.status === "playing" ? serverAutomatic(step.state, settings) : null;
-    const nextCard = !autoLast && !sweep && rulesV13(table) && auto?.kind === "last-card" ? auto.card : null;
-    const allowPass = passesAutomatically(table, seats);
-    const nextPass = !sweep && nextCard == null && allowPass && auto?.kind === "pass" && depth < 3;
-    const nextStuck = !sweep && nextCard == null && !nextPass && rulesV14(table) && depth < 4
-      && stuckBotTurn(step.state, settings, seats);
     if (sweep || nextCard || nextPass || nextStuck) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
     let swept = false;
     try {
-      const noPlay = allowPass && (autoPass || (kind === "pass" && shouldAutoPass(played.step.state, seat, settings)));
-      const loneTwo = isLoneTwoOfSpades(played.step.state.trickCards);
-      const shown = autoLast
-        ? lastCardMessage(String(me.display_name ?? ""))
-        : noPlay && !loneTwo
-        ? NO_PLAY_MESSAGE
-        : step.message;
       await saveProjection(admin, table, hand, seats, { ...step, message: shown }, played.deckText);
       mark("act-saved");
       if (autoPass) {
@@ -1424,8 +1526,6 @@ async function act(
 }
 
 const BOT_NAMES = ["Bot Ruby", "Bot Jade", "Bot Pearl", "Bot Amber"];
-const BOT_LOOP = 1;
-const BOT_SLEEP_BUDGET = 3_000;
 
 function botNames(seats: Row[]): string[] {
   return seats
@@ -1444,107 +1544,72 @@ function botWaiting(table: Row, now = Date.now()): boolean {
   return Number.isFinite(at) && now < at;
 }
 
-function thinkDelay(handId: string, seq: number): number {
-  let hash = 2166136261;
-  const text = `${handId}:${seq}`;
-  for (let index = 0; index < text.length; index++) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return 800 + ((hash >>> 0) % 701);
-}
-
-async function cardsPlayed(admin: SupabaseClient, handId: string): Promise<Card[]> {
-  const events = await must(
-    admin.from("events").select("kind, payload").eq("hand_id", handId).order("seq"),
-  );
-  const ids: string[] = [];
-  for (const event of events as Row[]) {
-    if (event.kind === "play" && Array.isArray(event.payload?.cards)) {
-      for (const card of event.payload.cards) ids.push(String(card));
-    }
-  }
-  return parseCards(ids);
-}
-
-async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
-  let slept = 0;
+async function runBots(admin: SupabaseClient, tableId: string, seeded?: Bundle): Promise<void> {
   try {
-    const first = await loadTable(admin, tableId);
-    if (botWaiting(first)) return;
-    if (first.settings?.botWaitUntil) {
+    const first = seeded ?? await loadBundle(admin, tableId);
+    mark("bot-bundle");
+    if (botWaiting(first.table)) return;
+    if (first.table.settings?.botWaitUntil) {
       await patchSetting(admin, tableId, "botWaitUntil", null, null);
     }
-    for (let step = 0; step < BOT_LOOP; step++) {
-      const table = await loadTable(admin, tableId);
-      if (table.status !== "playing") return;
-      const hand = await latestHand(admin, tableId);
-      if (!hand || hand.status !== "playing") return;
-      const seats = await loadSeats(admin, tableId);
-      const settings = settingsOf(table);
-      const played = await replayHand(admin, hand, settings);
-      const state = played.step.state;
-      if (state.status !== "playing") return;
-      if (held(table) || undoOf(table)) return;
-      if (rulesV13(table) && automaticLastCard(state, state.turn, settings)) return;
-      if (passesAutomatically(table, seats) && serverAutomatic(state, settings)?.kind === "pass") return;
-      const seat = seats.find((item) => item.seat_index === state.turn);
-      if (!seat?.is_bot) return;
-      if (rulesV14(table) && stuckLeaderAction(state, settings, true)?.kind === "pass") return;
+    const table = first.table;
+    if (table.status !== "playing") return;
+    const hand = first.hand;
+    if (!hand || hand.status !== "playing" || !first.secret) return;
+    const seats = first.seats;
+    const settings = settingsOf(table);
+    const played = replayLoaded(hand, first.secret, first.events, settings);
+    const state = played.step.state;
+    if (state.status !== "playing") return;
+    if (held(table) || undoOf(table)) return;
+    if (rulesV13(table) && automaticLastCard(state, state.turn, settings)) return;
+    if (passesAutomatically(table, seats) && serverAutomatic(state, settings)?.kind === "pass") return;
+    const seat = seats.find((item) => item.seat_index === state.turn);
+    if (!seat?.is_bot) return;
+    if (rulesV14(table) && stuckLeaderAction(state, settings, true)?.kind === "pass") return;
 
-      let liveHand = hand;
-      let liveState = state;
-      const delay = thinkDelay(liveHand.id, played.eventCount);
-      mark("bot-before-wait");
-      const elapsed = Date.now() - new Date(liveHand.turn_started_at).getTime();
-      const wait = Math.max(0, delay - elapsed);
-      if (wait > 0 && slept + wait <= BOT_SLEEP_BUDGET) {
-        await new Promise((resolve) => setTimeout(resolve, wait));
-        slept += wait;
-        mark("bot-waited");
-        const refreshed = await latestHand(admin, tableId);
-        if (!refreshed || refreshed.status !== "playing") return;
-        const again = await replayHand(admin, refreshed, settings);
-        if (again.step.state.status !== "playing" || again.step.state.turn !== seat.seat_index) continue;
-        liveHand = refreshed;
-        liveState = again.step.state;
-      }
-
-      const difficulty = String(seat.bot_difficulty ?? "normal");
-      const level: Difficulty = difficulty === "easy" || difficulty === "hard" ? difficulty : "normal";
-      const move = chooseMove({
-        seat: seat.seat_index,
-        hand: liveState.hands[seat.seat_index],
-        played: await cardsPlayed(admin, liveHand.id),
-        counts: liveState.hands.map((cards) => cards.length),
-        trick: liveState.trick,
-        trickSeat: liveState.trickSeat,
-        firstLead: liveState.firstLead,
-        running: liveState.running,
-        settings,
-        difficulty: level,
-        rng: () => {
-          const buffer = new Uint32Array(1);
-          crypto.getRandomValues(buffer);
-          return buffer[0] / 4294967296;
-        },
-        locked: liveState.locked,
-      });
-      mark("bot-chosen");
-      try {
-        const swept = await act(
-          admin,
-          tableId,
-          seat.user_id,
-          move.kind,
-          move.kind === "play" ? move.cards : [],
-          seat.seat_index,
-        );
-        if (swept) return;
-      } catch (error) {
-        console.error(error);
-        return;
-      }
+    const difficulty = String(seat.bot_difficulty ?? "normal");
+    const level: Difficulty = difficulty === "easy" || difficulty === "hard" ? difficulty : "normal";
+    const already = first.events.flatMap((event) => (
+      event.kind === "play" && Array.isArray(event.payload?.cards) ? event.payload.cards.map((card: unknown) => String(card)) : []
+    ));
+    const move = chooseMove({
+      seat: seat.seat_index,
+      hand: state.hands[seat.seat_index],
+      played: parseCards(already),
+      counts: state.hands.map((cards) => cards.length),
+      trick: state.trick,
+      trickSeat: state.trickSeat,
+      firstLead: state.firstLead,
+      running: state.running,
+      settings,
+      difficulty: level,
+      rng: () => {
+        const buffer = new Uint32Array(1);
+        crypto.getRandomValues(buffer);
+        return buffer[0] / 4294967296;
+      },
+      locked: state.locked,
+    });
+    mark("bot-chosen");
+    try {
+      const swept = await act(
+        admin,
+        tableId,
+        seat.user_id,
+        move.kind,
+        move.kind === "play" ? move.cards : [],
+        seat.seat_index,
+        false,
+        false,
+        0,
+        false,
+        undefined,
+        first,
+      );
+      if (swept) return;
+    } catch (error) {
+      console.error(error);
     }
   } catch (error) {
     console.error(error);
@@ -1849,7 +1914,7 @@ export async function handleDeal(req: Request): Promise<Response> {
   const table = await loadTable(admin, tableId);
   const seats = await loadSeats(admin, tableId);
   await dealHand(admin, table, seats, userId);
-  await runBots(admin, tableId);
+  mark("deal-done");
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -1861,8 +1926,6 @@ export async function handlePlay(req: Request): Promise<Response> {
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "play", cards);
   mark("play-acted");
-  await runBots(admin, tableId);
-  mark("play-bots");
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -1872,7 +1935,6 @@ export async function handlePass(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "pass", []);
-  await runBots(admin, tableId);
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
@@ -1881,20 +1943,31 @@ export async function handleTick(req: Request): Promise<Response> {
   const body = await readBody(req);
   const tableId = String(body.tableId ?? "");
   const admin = adminClient();
-  const table = await loadTable(admin, tableId);
-  await clearStaleHold(admin, table);
-  await settleUndo(admin, table);
-  const live = await loadTable(admin, tableId);
-  let hand = await latestHand(admin, tableId);
-  const settings = settingsOf(live);
-  if (undoOf(live)) {
+  const bundle0 = await loadBundle(admin, tableId);
+  mark("tick-bundle");
+  let bundle = bundle0;
+  let table = bundle.table;
+  const dirty = Boolean(undoOf(table)) || Boolean(table.settings?.hold && !held(table));
+  if (table.settings?.hold && !held(table)) await clearStaleHold(admin, table);
+  if (undoOf(table)) await settleUndo(admin, table);
+  if (dirty) {
+    bundle = await loadBundle(admin, tableId);
+    table = bundle.table;
+  }
+  const seats = bundle.seats;
+  const settings = settingsOf(table);
+  const hand = bundle.hand;
+  const played = hand && hand.status === "playing" && bundle.secret
+    ? replayLoaded(hand, bundle.secret, bundle.events, settings)
+    : null;
+  if (undoOf(table)) {
     if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
       await sendWebhook(admin, hand.id);
     }
     return json({ view: await buildView(admin, tableId, userId) });
   }
-  if (held(live)) {
-    const at = Date.parse(String(live.settings?.hold?.at ?? ""));
+  if (held(table)) {
+    const at = Date.parse(String(table.settings?.hold?.at ?? ""));
     if (!Number.isFinite(at) || Date.now() - at < AUTO_PASS_WAIT_MS) {
       if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
         await sendWebhook(admin, hand.id);
@@ -1902,31 +1975,25 @@ export async function handleTick(req: Request): Promise<Response> {
       return json({ view: await buildView(admin, tableId, userId) });
     }
   }
-  await resumeAutomaticLastCard(admin, tableId);
-  await resumeAutoPass(admin, tableId);
-  await resumeStuckBot(admin, tableId);
-  hand = await latestHand(admin, tableId);
-  if (hand?.status === "playing") {
-    const played = await replayHand(admin, hand, settings);
-    if (played.step.state.status === "complete") {
-      const seats = await loadSeats(admin, tableId);
-      await saveProjection(admin, table, hand, seats, played.step, played.deckText);
-      hand = await latestHand(admin, tableId);
-    }
-  }
-  if (hand?.status === "playing" && settings.turnTimerSeconds > 0) {
+  const state = played && played.step.state.status === "playing" ? played.step.state : null;
+  let moved = false;
+  if (state && rulesV13(table) && automaticLastCard(state, state.turn, settings)) {
+    await resumeAutomaticLastCard(admin, tableId);
+    moved = true;
+  } else if (state && passesAutomatically(table, seats) && serverAutomatic(state, settings)?.kind === "pass") {
+    await resumeAutoPass(admin, tableId);
+    moved = true;
+  } else if (state && stuckBotTurn(state, settings, seats)) {
+    await resumeStuckBot(admin, tableId);
+    moved = true;
+  } else if (state && hand && settings.turnTimerSeconds > 0) {
     const elapsed = Date.now() - new Date(hand.turn_started_at).getTime();
-    if (elapsed >= settings.turnTimerSeconds * 1000) {
-      const played = await replayHand(admin, hand, settings);
-      const timedSeat = played.step.state.status === "playing" ? played.step.state.turn : null;
-      if (timedSeat != null && timeoutBlock(played.step.state, timedSeat) === null) {
-        await act(admin, tableId, userId, "timeout", [], undefined, false, false, 0, false, timedSeat);
-      }
-      hand = await latestHand(admin, tableId);
+    if (elapsed >= settings.turnTimerSeconds * 1000 && timeoutBlock(state, state.turn) === null) {
+      await act(admin, tableId, userId, "timeout", [], undefined, false, false, 0, false, state.turn);
+      moved = true;
     }
   }
-  if (hand?.status === "playing") await runBots(admin, tableId);
-  hand = await latestHand(admin, tableId);
+  if (hand?.status === "playing") await runBots(admin, tableId, moved ? undefined : bundle);
   if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
     await sendWebhook(admin, hand.id);
   }
