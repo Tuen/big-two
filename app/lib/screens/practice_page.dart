@@ -787,14 +787,13 @@ class _PracticePageState extends State<PracticePage> {
   Widget _table(HandState state) {
     final seat = state.turn;
     final issue = _selected.isEmpty ? "Select cards to play" : playIssue(state, seat, parseCards(_selected.toList()), _settings);
-    final leading = state.trick == null;
-    final stuck = leading && legalSelections(state, seat, _settings).isEmpty;
+    final stuck = stuckOnTwos(state, seat, _settings);
     final timer = _secondsLeft == null ? "" : "  ·  ${_secondsLeft}s";
     final piles = _piles(state);
     final current = piles.$1;
     final previous = piles.$2;
     final oneCard = nextPlayerHasOneCard(state, seat);
-    final note = oneCard ? oneCardNote(state, seat, _settings) : null;
+    final note = stuck ? onlyTwosLeadNote : (oneCard ? oneCardNote(state, seat, _settings) : null);
     final mayPass = passIssue(state, seat, _settings) == null;
     return Scaffold(
       body: TableView(

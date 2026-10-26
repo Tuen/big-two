@@ -718,5 +718,19 @@ void main() {
     );
     expect(mustPlayHighestSingle(forced, 0, settings), isTrue);
     expect(shouldAutoPass(forced, 0, settings), isFalse);
+
+    final stuckLead = makeState(hands: [parseCards(["2H"]), ...others], turn: 0);
+    expect(stuckOnTwos(stuckLead, 0, settings), isTrue);
+    expect(shouldAutoPass(stuckLead, 0, settings), isFalse);
+    expect(passIssue(stuckLead, 0, settings), isNull);
+    final passedLead = applyPass(stuckLead, 0, settings) as StepOk;
+    expect(passedLead.state.turn, 1);
+    expect(passedLead.state.trick, isNull);
+    final nextLead = applyPlay(passedLead.state, 1, ["4C"], settings);
+    expect(nextLead.ok, isTrue);
+
+    final twoTwos = makeState(hands: [parseCards(["2H", "2D"]), ...others], turn: 0);
+    expect(stuckOnTwos(twoTwos, 0, settings), isFalse);
+    expect(passIssue(twoTwos, 0, settings), "You must lead — passing isn't allowed");
   });
 }

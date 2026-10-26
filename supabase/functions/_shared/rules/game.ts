@@ -86,6 +86,9 @@ export const CANNOT_BEAT_NOTE =
 /** Shown to the whole table when the server passes a player who has no legal play. */
 export const NO_PLAY_MESSAGE = "No play – auto pass";
 
+/** Shown to a leader whose cards are all 2s, so they cannot finish the hand. */
+export const ONLY_TWOS_NOTE = "Only 2s left – can't go out, please pass";
+
 /** How long the server waits, after the turn starts, before that automatic pass. */
 export const AUTO_PASS_WAIT_MS = 1000;
 
@@ -295,13 +298,36 @@ export function automaticLastCard(state: HandState, seat: number, settings: Sett
  * True when this seat is following a trick and no subset of their hand is a legal play.
  * Uses legalSelections, which uses playIssue, so straights, finishing on 2s only,
  * and the one-card highest-single rule are the same checks as a tapped Play.
- * Never true on a new lead, even when the only cards are 2s.
+ * Never true on a new lead, even when the only cards are 2s. That leader taps Pass.
  */
 export function shouldAutoPass(state: HandState, seat: number, settings: Settings): boolean {
   if (state.status !== "playing" || state.turn !== seat) return false;
   if (state.trick === null) return false;
   if (passIssue(state, seat, settings) !== null) return false;
   return legalSelections(state, seat, settings).length === 0;
+}
+
+/** Leading a new trick, every card left is a 2, and none of them can be played. */
+export function stuckOnTwos(state: HandState, seat: number, settings: Settings): boolean {
+  if (state.status !== "playing" || state.turn !== seat || state.trick !== null) return false;
+  const hand = state.hands[seat];
+  if (!hand || hand.length === 0 || hand.some((card) => card.r !== 15)) return false;
+  return legalSelections(state, seat, settings).length === 0;
+}
+
+/**
+ * What to do with a leader who only has 2s.
+ * A person is not auto-passed: Pass is allowed and the note is shown.
+ * A computer player is passed after one second. This is not the no-play auto-pass.
+ */
+export function stuckLeaderAction(
+  state: HandState,
+  settings: Settings,
+  isBot: boolean,
+): { kind: "manual"; note: string } | { kind: "pass"; waitMs: number } | null {
+  if (!stuckOnTwos(state, state.turn, settings)) return null;
+  if (isBot) return { kind: "pass", waitMs: AUTO_PASS_WAIT_MS };
+  return { kind: "manual", note: ONLY_TWOS_NOTE };
 }
 
 export type ServerAutomatic =
@@ -311,7 +337,7 @@ export type ServerAutomatic =
 /**
  * What the server may do without a phone asking.
  * A last card is played. A follower with no legal play is passed.
- * A leader is left alone. There is no client flag that can force either.
+ * A leader, including one who only has 2s, is left alone. There is no client flag that can force either.
  */
 export function serverAutomatic(state: HandState, settings: Settings): ServerAutomatic | null {
   if (state.status !== "playing") return null;

@@ -13,6 +13,8 @@ import {
   roundWinners,
   serverAutomatic,
   shouldAutoPass,
+  stuckLeaderAction,
+  type HandState,
   type ReplayEvent,
   type Settings,
   type StepOk,
@@ -254,6 +256,7 @@ async function revertMove(admin: SupabaseClient, table: Row, hand: Row, seq: num
   await admin.from("hands").update({ last_message: MOVE_UNDONE }).eq("id", hand.id);
   await maybeAutoLastCard(admin, table.id);
   await maybeAutoPass(admin, table.id);
+  await maybePassStuckBot(admin, table.id);
 }
 
 async function openUndo(admin: SupabaseClient, table: Row, seats: Row[], me: Row): Promise<void> {
@@ -1014,6 +1017,68 @@ async function resumeAutoPass(admin: SupabaseClient, tableId: string): Promise<v
   }
 }
 
+function stuckBotTurn(state: HandState, settings: Settings, seats: Row[]): boolean {
+  const seat = seats.find((item) => item.seat_index === state.turn);
+  if (!seat?.is_bot) return false;
+  return stuckLeaderAction(state, settings, true)?.kind === "pass";
+}
+
+/** A computer player who can only lead 2s passes after one second. A person does not. */
+async function passStuckBot(admin: SupabaseClient, tableId: string, wait: boolean, depth: number): Promise<void> {
+  if (wait) await new Promise((resolve) => setTimeout(resolve, AUTO_PASS_WAIT_MS));
+  const table = await loadTable(admin, tableId);
+  if (!rulesV14(table) || undoOf(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  const state = played.step.state;
+  const seats = await loadSeats(admin, tableId);
+  if (!stuckBotTurn(state, settingsOf(table), seats)) return;
+  const who = seats.find((item) => item.seat_index === state.turn);
+  if (!who) return;
+  await act(admin, tableId, who.user_id, "pass", [], who.seat_index, false, false, depth, true);
+}
+
+async function maybePassStuckBot(admin: SupabaseClient, tableId: string): Promise<void> {
+  const table = await loadTable(admin, tableId);
+  if (!rulesV14(table) || undoOf(table) || held(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  const seats = await loadSeats(admin, tableId);
+  if (!stuckBotTurn(played.step.state, settingsOf(table), seats)) return;
+  await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+  try {
+    await passStuckBot(admin, tableId, true, 1);
+  } catch (error) {
+    console.error(error);
+  } finally {
+    const fresh = await loadTable(admin, tableId);
+    if (fresh.settings?.hold) await setHold(admin, fresh, null);
+  }
+}
+
+async function resumeStuckBot(admin: SupabaseClient, tableId: string): Promise<void> {
+  const table = await loadTable(admin, tableId);
+  if (!rulesV14(table) || undoOf(table) || held(table)) return;
+  const hand = await latestHand(admin, tableId);
+  if (!hand || hand.status !== "playing" || hand.webhook_status) return;
+  const started = Date.parse(String(hand.turn_started_at ?? ""));
+  if (!Number.isFinite(started) || Date.now() - started < AUTO_PASS_WAIT_MS) return;
+  const played = await replayHand(admin, hand, settingsOf(table));
+  const seats = await loadSeats(admin, tableId);
+  if (!stuckBotTurn(played.step.state, settingsOf(table), seats)) return;
+  await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+  try {
+    await passStuckBot(admin, tableId, false, 1);
+  } catch (error) {
+    console.error(error);
+  } finally {
+    const fresh = await loadTable(admin, tableId);
+    if (fresh.settings?.hold) await setHold(admin, fresh, null);
+  }
+}
+
 async function act(
   admin: SupabaseClient,
   tableId: string,
@@ -1024,12 +1089,13 @@ async function act(
   autoLast = false,
   autoPass = false,
   depth = 0,
+  allowHeld = false,
 ): Promise<boolean> {
   let table = await loadTable(admin, tableId);
   await clearStaleHold(admin, table);
   await settleUndo(admin, table);
   table = await loadTable(admin, tableId);
-  if (undoOf(table) || (!autoLast && !autoPass && held(table))) throw new HttpError(400, "Wait for the undo vote");
+  if (undoOf(table) || (!autoLast && !autoPass && !allowHeld && held(table))) throw new HttpError(400, "Wait for the undo vote");
   const seats = await loadSeats(admin, tableId);
   const settings = settingsOf(table);
   const me = botSeat == null ? requireSeat(seats, userId) : seats.find((seat) => seat.seat_index === botSeat);
@@ -1066,7 +1132,9 @@ async function act(
     const auto = !sweep && step.state.status === "playing" ? serverAutomatic(step.state, settings) : null;
     const nextCard = !autoLast && !sweep && rulesV13(table) && auto?.kind === "last-card" ? auto.card : null;
     const nextPass = !sweep && nextCard == null && rulesV14(table) && auto?.kind === "pass" && depth < 3;
-    if (sweep || nextCard || nextPass) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
+    const nextStuck = !sweep && nextCard == null && !nextPass && rulesV14(table) && depth < 4
+      && stuckBotTurn(step.state, settings, seats);
+    if (sweep || nextCard || nextPass || nextStuck) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
     let swept = false;
     try {
       const noPlay = autoPass || (kind === "pass" && shouldAutoPass(played.step.state, seat, settings));
@@ -1114,9 +1182,19 @@ async function act(
         const fresh = await loadTable(admin, tableId);
         if (fresh.settings?.hold) await setHold(admin, fresh, null);
       }
+    } else if (nextStuck) {
+      try {
+        await passStuckBot(admin, tableId, true, depth + 1);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        const fresh = await loadTable(admin, tableId);
+        if (fresh.settings?.hold) await setHold(admin, fresh, null);
+      }
     } else if (swept) {
       await maybeAutoLastCard(admin, tableId);
       await maybeAutoPass(admin, tableId);
+      await maybePassStuckBot(admin, tableId);
     }
     return swept;
   }
@@ -1192,6 +1270,7 @@ async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
       if (rulesV14(table) && serverAutomatic(state, settings)?.kind === "pass") return;
       const seat = seats.find((item) => item.seat_index === state.turn);
       if (!seat?.is_bot) return;
+      if (rulesV14(table) && stuckLeaderAction(state, settings, true)?.kind === "pass") return;
 
       let liveHand = hand;
       let liveState = state;
@@ -1538,6 +1617,7 @@ export async function handleTick(req: Request): Promise<Response> {
   }
   await resumeAutomaticLastCard(admin, tableId);
   await resumeAutoPass(admin, tableId);
+  await resumeStuckBot(admin, tableId);
   hand = await latestHand(admin, tableId);
   if (hand?.status === "playing") {
     const played = await replayHand(admin, hand, settings);

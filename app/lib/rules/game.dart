@@ -302,6 +302,7 @@ String? automaticLastCard(HandState state, int seat, Settings settings) {
 }
 
 const noPlayMessage = "No play – auto pass";
+const onlyTwosLeadNote = "Only 2s left – can't go out, please pass";
 
 /// True when this seat is following and nothing they hold is a legal play.
 /// A new lead is never an auto-pass, even when the only cards are 2s.
@@ -309,6 +310,14 @@ bool shouldAutoPass(HandState state, int seat, Settings settings) {
   if (state.status != "playing" || state.turn != seat) return false;
   if (state.trick == null) return false;
   if (passIssue(state, seat, settings) != null) return false;
+  return legalSelections(state, seat, settings).isEmpty;
+}
+
+/// Leading, every card left is a 2, and none of them can be played.
+bool stuckOnTwos(HandState state, int seat, Settings settings) {
+  if (state.status != "playing" || state.turn != seat || state.trick != null) return false;
+  final hand = state.hands[seat];
+  if (hand.isEmpty || hand.any((card) => card.rank != 15)) return false;
   return legalSelections(state, seat, settings).isEmpty;
 }
 

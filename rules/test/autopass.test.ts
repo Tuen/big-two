@@ -12,8 +12,12 @@ import {
   makeState,
   NO_PLAY_MESSAGE,
   playIssue,
+  passIssue,
   serverAutomatic,
   shouldAutoPass,
+  stuckLeaderAction,
+  stuckOnTwos,
+  ONLY_TWOS_NOTE,
   type HandState,
 } from "../../supabase/functions/_shared/rules/game.ts";
 import { recentActions, type RecentEvent } from "../../supabase/functions/_shared/recent.ts";
@@ -61,8 +65,16 @@ test("computer players: auto-pass, a leader left alone, and a pre-selected play"
     hands: [parseCards(["2H"]), ...fillers],
     turn: 0,
   });
+  assert.equal(stuckOnTwos(leader, 0, settings), true);
   assert.equal(serverAutomatic(leader, settings), null);
   assert.equal(shouldAutoPass(leader, 0, settings), false);
+  assert.equal(passIssue(leader, 0, settings), null);
+  const manual = stuckLeaderAction(leader, settings, false);
+  assert.equal(manual?.kind, "manual");
+  if (manual?.kind === "manual") assert.equal(manual.note, ONLY_TWOS_NOTE);
+  const botWait = stuckLeaderAction(leader, settings, true);
+  assert.equal(botWait?.kind, "pass");
+  if (botWait?.kind === "pass") assert.equal(botWait.waitMs, 1000);
   const botLead = chooseMove({
     seat: 0,
     hand: leader.hands[0],
@@ -77,8 +89,26 @@ test("computer players: auto-pass, a leader left alone, and a pre-selected play"
     rng: () => 0,
   });
   assert.equal(botLead.kind, "pass");
-  assert.equal(serverAutomatic(leader, settings), null);
-  story.push("Leader: a computer player whose only card was a 2 was leading a new trick. They cannot finish on a 2, and the server did not auto-pass them.");
+  const passedLead = applyPass(leader, 0, settings);
+  assert.equal(passedLead.ok, true);
+  if (!passedLead.ok) return;
+  assert.equal(passedLead.state.turn, 1);
+  assert.equal(passedLead.state.trick, null);
+  const nextLead = applyPlay(passedLead.state, 1, ["4D"], settings);
+  assert.equal(nextLead.ok, true);
+  const cameBack = state({
+    hands: [parseCards(["2S"]), ...fillers],
+    turn: 0,
+  });
+  assert.equal(stuckOnTwos(cameBack, 0, settings), true);
+  assert.equal(serverAutomatic(cameBack, settings), null);
+  const twoTwos = state({
+    hands: [parseCards(["2H", "2C"]), ...fillers],
+    turn: 0,
+  });
+  assert.equal(stuckOnTwos(twoTwos, 0, settings), false);
+  assert.equal(passIssue(twoTwos, 0, settings), "You must lead — passing isn't allowed");
+  story.push("Stuck leader: a person holding only the 2 of hearts was leading. They were not auto-passed. Pass was allowed, with \"Only 2s left – can't go out, please pass\". After they passed, the next player led the 4 of diamonds. A computer in that seat passes after 1 second. Two 2s can still be led one at a time, so Pass stays off.");
 
   const straight = state({
     hands: [parseCards(["JH", "QD", "KC", "AS", "2C"]), ...fillers],

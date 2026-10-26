@@ -447,7 +447,7 @@ class _OnlinePageState extends State<OnlinePage> {
         "timezone": settings.timezone,
         "firstRoundNumber": settings.firstRoundNumber,
         "v13": true,
-        "v14": true,
+        if (const bool.fromEnvironment("TEST_PREVIEW")) "v14": true,
       };
 
   HandState? _local(TableSnapshot view) {
@@ -794,10 +794,11 @@ class _OnlinePageState extends State<OnlinePage> {
     final issue = !mine || local == null
         ? null
         : (selected.isEmpty ? "Select cards to play" : playIssue(local, view.you, parseCards(selected), view.settings));
-    final leading = view.trick == null;
-    final stuck = mine && local != null && leading && legalSelections(local, view.you, view.settings).isEmpty;
+    final stuck = mine && local != null && stuckOnTwos(local, view.you, view.settings);
     final oneCard = mine && local != null && nextPlayerHasOneCard(local, view.you);
-    final note = oneCard ? oneCardNote(local, view.you, view.settings) : null;
+    final note = stuck
+        ? onlyTwosLeadNote
+        : (oneCard ? oneCardNote(local, view.you, view.settings) : null);
     final mayPass = mine && local != null && passIssue(local, view.you, view.settings) == null;
     final voting = view.undo != null;
     final paused = voting || view.holding;
@@ -871,6 +872,7 @@ class _OnlinePageState extends State<OnlinePage> {
 
   bool _everyoneSees(String message) {
     return message == noPlayMessage ||
+        message == "You can't go out if you only have 2s. The lead passes on." ||
         message == "Undo rejected" ||
         message == "Move undone" ||
         message == "2♠ – everyone passes" ||
