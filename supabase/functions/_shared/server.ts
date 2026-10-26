@@ -68,8 +68,18 @@ export class HttpError extends Error {
   }
 }
 
+const marks: { k: string; ms: number }[] = [];
+let markStart = 0;
+
+function mark(k: string) {
+  marks.push({ k, ms: Date.now() - markStart });
+}
+
 export function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
+  const payload = body && typeof body === "object" && !Array.isArray(body) && marks.length
+    ? { ...(body as Record<string, unknown>), trace: marks.slice() }
+    : body;
+  return new Response(JSON.stringify(payload), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
@@ -78,6 +88,9 @@ export function json(body: unknown, status = 200): Response {
 export function serveAction(action: (req: Request) => Promise<Response>): void {
   Deno.serve(async (req) => {
     if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+    marks.length = 0;
+    markStart = Date.now();
+    mark("in");
     try {
       return await action(req);
     } catch (error) {
@@ -108,6 +121,7 @@ async function requireUser(req: Request): Promise<string> {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const { data, error } = await client.auth.getUser();
+  mark("user");
   if (error || !data.user) throw new HttpError(401, "Sign in first");
   return data.user.id;
 }
@@ -585,6 +599,7 @@ function resultJson(row: Row) {
 }
 
 export async function buildView(admin: SupabaseClient, tableId: string, userId: string) {
+  mark("view");
   await touch(admin, tableId, userId);
   let table = await loadTable(admin, tableId);
   await clearStaleHold(admin, table);
@@ -1259,6 +1274,7 @@ async function act(
   allowHeld = false,
   expectSeat?: number,
 ): Promise<boolean> {
+  mark("act-in");
   let table = await loadTable(admin, tableId);
   await clearStaleHold(admin, table);
   await settleUndo(admin, table);
@@ -1311,6 +1327,7 @@ async function act(
       kind,
       payload: { cards: kind === "play" ? step.state.trickCards : [] },
     });
+    mark("act-inserted");
     if (error) {
       if (String(error.code) === "23505" && (kind === "timeout" || autoPass)) {
         await traceMove(
@@ -1348,6 +1365,7 @@ async function act(
         ? NO_PLAY_MESSAGE
         : step.message;
       await saveProjection(admin, table, hand, seats, { ...step, message: shown }, played.deckText);
+      mark("act-saved");
       if (autoPass) {
         await traceMove(admin, table, hand, String(me.display_name ?? ""), "auto-pass", played.step.state.trickCards.join(" "), "no legal play");
       }
@@ -1477,11 +1495,13 @@ async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
       let liveHand = hand;
       let liveState = state;
       const delay = thinkDelay(liveHand.id, played.eventCount);
+      mark("bot-before-wait");
       const elapsed = Date.now() - new Date(liveHand.turn_started_at).getTime();
       const wait = Math.max(0, delay - elapsed);
       if (wait > 0 && slept + wait <= BOT_SLEEP_BUDGET) {
         await new Promise((resolve) => setTimeout(resolve, wait));
         slept += wait;
+        mark("bot-waited");
         const refreshed = await latestHand(admin, tableId);
         if (!refreshed || refreshed.status !== "playing") return;
         const again = await replayHand(admin, refreshed, settings);
@@ -1510,6 +1530,7 @@ async function runBots(admin: SupabaseClient, tableId: string): Promise<void> {
         },
         locked: liveState.locked,
       });
+      mark("bot-chosen");
       try {
         const swept = await act(
           admin,
@@ -1839,7 +1860,9 @@ export async function handlePlay(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "play", cards);
+  mark("play-acted");
   await runBots(admin, tableId);
+  mark("play-bots");
   return json({ view: await buildView(admin, tableId, userId) });
 }
 
