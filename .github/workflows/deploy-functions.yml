@@ -22,7 +22,7 @@ jobs:
         with:
           version: 2.122.0
 
-      - name: Read TVZU2X hand 10
+      - name: Read the deal of TVZU2X hand 10
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           ALT_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
@@ -34,49 +34,24 @@ jobs:
           import json, os, urllib.request
           sql = """
           select json_build_object(
-            'seats', (
-              select coalesce(json_agg(json_build_object(
-                'seat', s.seat_index, 'name', s.display_name, 'bot', s.is_bot
-              ) order by s.seat_index), '[]'::json)
-              from seats s
-              join game_tables t on t.id = s.table_id
-              where t.code = 'TVZU2X'
-            ),
-            'hands', (
-              select coalesce(json_agg(json_build_object(
-                'hand', h.hand_number,
-                'status', h.status,
-                'winner', h.winner_seat,
-                'message', h.last_message,
-                'at', h.created_at,
-                'cards', r.cards_left,
-                'players', r.players,
-                'points', r.hand_points,
-                'events', (
-                  select coalesce(json_agg(json_build_object(
-                    'seq', e.seq, 'seat', e.seat_index, 'kind', e.kind, 'cards', e.payload->'cards'
-                  ) order by e.seq), '[]'::json)
-                  from events e where e.hand_id = h.id
-                )
-              ) order by h.hand_number), '[]'::json)
-              from hands h
+            'v14', (select settings->>'v14' from game_tables where code = 'TVZU2X'),
+            'deck', (
+              select s.deck from hand_secrets s
+              join hands h on h.id = s.hand_id
               join game_tables t on t.id = h.table_id
-              left join hand_results r on r.hand_id = h.id
-              where t.code = 'TVZU2X' and h.hand_number between 9 and 10
+              where t.code = 'TVZU2X' and h.hand_number = 10
+              order by h.created_at desc limit 1
             )
           ) as report;
           """
           request = urllib.request.Request(
               "https://api.supabase.com/v1/projects/ascorkeijzrpmfykpcrb/database/query",
               data=json.dumps({"query": sql}).encode(),
-              headers={
-                  "Authorization": "Bearer " + os.environ["SUPABASE_ACCESS_TOKEN"],
-                  "Content-Type": "application/json",
-              },
+              headers={"Authorization": "Bearer " + os.environ["SUPABASE_ACCESS_TOKEN"], "Content-Type": "application/json"},
               method="POST",
           )
           with urllib.request.urlopen(request) as response:
-              print(response.read().decode()[:20000])
+              print(response.read().decode())
           PY
 
       - name: Add viewer and chat tables
@@ -94,6 +69,7 @@ jobs:
           python3 - <<'PY'
           import json, os, urllib.request
           sql = open("supabase/migrations/005_viewers_and_chat.sql", encoding="utf-8").read()
+          sql += "\n" + open("supabase/migrations/006_pause_and_move_log.sql", encoding="utf-8").read()
           request = urllib.request.Request(
               "https://api.supabase.com/v1/projects/ascorkeijzrpmfykpcrb/database/query",
               data=json.dumps({"query": sql}).encode(),

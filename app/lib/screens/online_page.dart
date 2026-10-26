@@ -65,6 +65,7 @@ class _OnlinePageState extends State<OnlinePage> {
   Timer? _botTimer;
   Timer? _noPlay;
   Timer? _chatPoll;
+  Timer? _pauseTimer;
   String? _noPlayCue;
   int? _chatSeen;
   bool _chatOpen = false;
@@ -105,6 +106,7 @@ class _OnlinePageState extends State<OnlinePage> {
     _sweepTimer?.cancel();
     _botTimer?.cancel();
     _noPlay?.cancel();
+    _pauseTimer?.cancel();
     _chatPoll?.cancel();
     _chatTick.dispose();
     _channel?.unsubscribe();
@@ -288,7 +290,16 @@ class _OnlinePageState extends State<OnlinePage> {
     }
   }
 
+  void _armPause(TableSnapshot next) {
+    _pauseTimer?.cancel();
+    if (!next.holding) return;
+    _pauseTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted) _refresh();
+    });
+  }
+
   void _followUp(TableSnapshot next) {
+    _armPause(next);
     if (next.watching) {
       _armBots(next);
       _armTwoSpades(next);

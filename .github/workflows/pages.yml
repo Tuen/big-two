@@ -33,7 +33,7 @@ jobs:
 
       - name: Test the TypeScript rules
         working-directory: rules
-        run: node --experimental-strip-types --test --test-concurrency=1 test/rules.test.ts test/bots.test.ts test/recent.test.ts test/autopass.test.ts test/audience.test.ts
+        run: node --experimental-strip-types --test --test-concurrency=1 test/rules.test.ts test/bots.test.ts test/recent.test.ts test/autopass.test.ts test/clash.test.ts test/audience.test.ts
 
       - name: Test the Flutter app
         working-directory: app

@@ -301,10 +301,32 @@ export function automaticLastCard(state: HandState, seat: number, settings: Sett
  * Never true on a new lead, even when the only cards are 2s. That leader taps Pass.
  */
 export function shouldAutoPass(state: HandState, seat: number, settings: Settings): boolean {
-  if (state.status !== "playing" || state.turn !== seat) return false;
-  if (state.trick === null) return false;
-  if (passIssue(state, seat, settings) !== null) return false;
-  return legalSelections(state, seat, settings).length === 0;
+  return autoPassBlock(state, seat, settings) === null;
+}
+
+/**
+ * Why this seat must not be auto-passed. Null means the latest state still has
+ * no legal play for them, and it is still their turn to follow.
+ */
+export function autoPassBlock(state: HandState, seat: number, settings: Settings): string | null {
+  if (state.status !== "playing") return "the hand is over";
+  if (state.turn !== seat) return "it is no longer their turn";
+  if (state.trick === null) return "they are leading";
+  if (legalSelections(state, seat, settings).length > 0) return "they can beat what is on the table";
+  if (passIssue(state, seat, settings) !== null) return "a pass is not allowed";
+  return null;
+}
+
+/** A turn timer may pass only the seat whose clock ran out. */
+export function timeoutBlock(state: HandState, seat: number): string | null {
+  if (state.status !== "playing") return "the hand is over";
+  if (state.turn !== seat) return "it is no longer their turn";
+  return null;
+}
+
+/** One human plays their own passes. Two or more humans keep the v1.4 auto-pass. */
+export function autoPassForHumans(humanCount: number): boolean {
+  return humanCount >= 2;
 }
 
 /** Leading a new trick, every card left is a 2, and none of them can be played. */
