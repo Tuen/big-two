@@ -555,6 +555,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
       cards: Array.isArray(event.payload?.cards) ? event.payload.cards.map((card: unknown) => String(card)) : [],
     })),
     settings,
+    rulesV14(table),
   );
   const open = undoOf(table);
   const last = events.length > 0 ? events[events.length - 1] : null;
@@ -1137,7 +1138,7 @@ async function act(
     if (sweep || nextCard || nextPass || nextStuck) await setHold(admin, table, { handId: hand.id, at: new Date().toISOString() });
     let swept = false;
     try {
-      const noPlay = autoPass || (kind === "pass" && shouldAutoPass(played.step.state, seat, settings));
+      const noPlay = rulesV14(table) && (autoPass || (kind === "pass" && shouldAutoPass(played.step.state, seat, settings)));
       const loneTwo = isLoneTwoOfSpades(played.step.state.trickCards);
       const shown = autoLast
         ? lastCardMessage(String(me.display_name ?? ""))

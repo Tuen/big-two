@@ -41,6 +41,7 @@ export function recentActions(
   previousWinner: number | null,
   events: readonly RecentEvent[],
   settings: Settings,
+  markNoPlay = true,
 ): RecentAction[] {
   let step: Step = {
     ok: true,
@@ -53,7 +54,8 @@ export function recentActions(
     if (!step.ok || step.state.status !== "playing") break;
     const seat = event.seat;
     const before = step.state.hands[seat]?.length ?? 0;
-    const noPlay = event.kind === "pass"
+    const noPlay = markNoPlay
+      && event.kind === "pass"
       && shouldAutoPass(step.state, seat, settings)
       && !isLoneTwoOfSpades(step.state.trickCards);
     if (event.kind === "play") step = applyPlay(step.state, seat, event.cards ?? [], settings);
