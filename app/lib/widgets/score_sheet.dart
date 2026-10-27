@@ -13,6 +13,7 @@ class ScoreHand {
   final String bonuses;
   final bool roundOver;
   final String? scoreStatus;
+  final String standInNote;
   const ScoreHand({
     required this.round,
     required this.hand,
@@ -24,6 +25,7 @@ class ScoreHand {
     required this.bonuses,
     required this.roundOver,
     this.scoreStatus,
+    this.standInNote = "",
   });
 }
 
@@ -202,6 +204,7 @@ Widget _handTile(ScoreHand hand) {
           ),
         Text(bits.join("\n"), style: const TextStyle(height: 1.35)),
         if (hand.bonuses.isNotEmpty) Text(hand.bonuses, style: const TextStyle(color: gold)),
+        if (hand.standInNote.isNotEmpty) Text(hand.standInNote, style: const TextStyle(color: gold)),
       ],
     ),
   );

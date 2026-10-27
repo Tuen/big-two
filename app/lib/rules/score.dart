@@ -67,6 +67,7 @@ class WebhookPayload {
   final String? roundWinner;
   final bool hasBots;
   final List<String> bots;
+  final List<Map<String, Object?>> standIns;
   const WebhookPayload({
     required this.handId,
     required this.tableCode,
@@ -83,6 +84,12 @@ class WebhookPayload {
     required this.roundWinner,
     this.hasBots = false,
     this.bots = const [],
+    this.standIns = const [
+      {"played": false, "who": null},
+      {"played": false, "who": null},
+      {"played": false, "who": null},
+      {"played": false, "who": null},
+    ],
   });
 
   Map<String, Object?> toJson() => {
@@ -101,6 +108,7 @@ class WebhookPayload {
         "roundWinner": roundWinner,
         "hasBots": hasBots,
         "bots": bots,
+        "standIns": standIns,
       };
 }
 
@@ -129,6 +137,7 @@ WebhookPayload webhookPayload({
   required List<Bonus> bonuses,
   bool hasBots = false,
   List<String> bots = const [],
+  List<Map<String, Object?>>? standIns,
 }) {
   return WebhookPayload(
     handId: handId,
@@ -149,5 +158,14 @@ WebhookPayload webhookPayload({
     roundWinner: roundWinnerName(players, runningTotals, roundOver),
     hasBots: hasBots,
     bots: [...bots],
+    standIns: [
+      for (final item in standIns ?? const [
+        {"played": false, "who": null},
+        {"played": false, "who": null},
+        {"played": false, "who": null},
+        {"played": false, "who": null},
+      ])
+        {"played": item["played"] == true, "who": item["who"]},
+    ],
   );
 }

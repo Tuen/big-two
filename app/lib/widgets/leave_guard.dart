@@ -24,17 +24,76 @@ bool shouldWarnBeforeLeaving({
 
 String leaveMessage({required bool host}) => host ? leaveHostMessage : leaveGuestMessage;
 
+const exitTitle = "Exit this game?";
+
+const exitMessage =
+    "If someone is watching, the person who started watching first takes your seat, cards, and turn. If nobody is watching, a computer takes the seat. Your score stays under your name.";
+
+const lobbyExitTitle = "Exit this table?";
+
+const lobbyExitMessage = "This frees your seat so someone else can join. Going back keeps the seat.";
+
+const watchExitTitle = "Stop watching?";
+
+const watchExitMessage = "You leave the watching list. The players keep their seats.";
+
+/// Shown when someone goes back or closes the app during a game. The seat stays.
+const seatHeldTitle = "Go back?";
+
+const seatHeldMessage =
+    "Your seat stays held. Closing the app does the same. Press Exit to give the seat to a watcher, or to a computer if nobody is watching.";
+
 Future<bool> confirmLeave(BuildContext context, {required bool host}) async {
+  return _confirm(
+    context,
+    title: leaveTitle,
+    message: leaveMessage(host: host),
+    confirm: "Leave anyway",
+    confirmKey: "leave-anyway",
+  );
+}
+
+Future<bool> confirmExit(BuildContext context) {
+  return _confirm(context, title: exitTitle, message: exitMessage, confirm: "Exit", confirmKey: "confirm-exit");
+}
+
+Future<bool> confirmLobbyExit(BuildContext context) {
+  return _confirm(
+    context,
+    title: lobbyExitTitle,
+    message: lobbyExitMessage,
+    confirm: "Exit",
+    confirmKey: "confirm-exit",
+  );
+}
+
+Future<bool> confirmStopWatching(BuildContext context) {
+  return _confirm(
+    context,
+    title: watchExitTitle,
+    message: watchExitMessage,
+    confirm: "Exit",
+    confirmKey: "confirm-exit",
+  );
+}
+
+Future<bool> _confirm(
+  BuildContext context, {
+  required String title,
+  required String message,
+  required String confirm,
+  required String confirmKey,
+}) async {
   final leave = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text(leaveTitle),
-      content: Text(leaveMessage(host: host)),
+      title: Text(title),
+      content: Text(message),
       actions: [
         TextButton(
-          key: const Key("leave-anyway"),
+          key: Key(confirmKey),
           onPressed: () => Navigator.pop(context, true),
-          child: const Text("Leave anyway"),
+          child: Text(confirm),
         ),
         FilledButton(
           key: const Key("stay-in-game"),
@@ -53,8 +112,17 @@ Future<bool> confirmLeave(BuildContext context, {required bool host}) async {
 class LeaveGate extends StatefulWidget {
   final bool warn;
   final bool host;
+  final String? title;
+  final String? message;
   final Widget child;
-  const LeaveGate({super.key, required this.warn, required this.host, required this.child});
+  const LeaveGate({
+    super.key,
+    required this.warn,
+    required this.host,
+    this.title,
+    this.message,
+    required this.child,
+  });
 
   @override
   State<LeaveGate> createState() => _LeaveGateState();
@@ -87,7 +155,13 @@ class _LeaveGateState extends State<LeaveGate> {
   Future<void> _ask() async {
     if (_asking || !mounted) return;
     _asking = true;
-    final leave = await confirmLeave(context, host: widget.host);
+    final leave = await _confirm(
+      context,
+      title: widget.title ?? leaveTitle,
+      message: widget.message ?? leaveMessage(host: widget.host),
+      confirm: "Leave anyway",
+      confirmKey: "leave-anyway",
+    );
     _asking = false;
     if (!leave || !mounted) return;
     setState(() => _confirmed = true);

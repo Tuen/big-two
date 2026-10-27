@@ -20,6 +20,21 @@ class GameApi {
     }
   }
 
+  /// Pressing Exit. Closing the app does not call this, so the seat stays held.
+  Future<void> leave(String tableId) async {
+    try {
+      final response = await client.functions.invoke("table", body: {"action": "exit", "tableId": tableId});
+      final data = _asMap(response.data);
+      if (data["error"] is String) throw GameException(data["error"] as String);
+      if (data["left"] == true) return;
+      throw GameException("The table could not be updated");
+    } on GameException {
+      rethrow;
+    } on FunctionException catch (error) {
+      throw GameException(_functionMessage(error));
+    }
+  }
+
   Future<TableSnapshot> call(String function, Map<String, dynamic> body) async {
     try {
       final response = await client.functions.invoke(function, body: body);

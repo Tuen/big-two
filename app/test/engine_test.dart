@@ -343,6 +343,38 @@ void main() {
     expect(body.roundWinner, "Justin");
     expect(body.hasBots, isFalse);
     expect(body.bots, isEmpty);
+    expect(body.standIns, [
+      {"played": false, "who": null},
+      {"played": false, "who": null},
+      {"played": false, "who": null},
+      {"played": false, "who": null},
+    ]);
+    final stood = webhookPayload(
+      handId: "hand-1",
+      tableCode: "ABC123",
+      season: 24,
+      round: 11,
+      hand: 3,
+      date: "2026-10-23",
+      players: ["Justin", "Mary", "Pauline", "Damien"],
+      cardsLeft: score.cardsLeft,
+      handPoints: score.handPoints,
+      runningTotals: score.runningTotals,
+      roundOver: score.roundOver,
+      bonuses: bonuses,
+      standIns: [
+        {"played": false, "who": null},
+        {"played": true, "who": "Ralph"},
+        {"played": true, "who": "computer"},
+        {"played": false, "who": null},
+      ],
+    );
+    expect(stood.players, ["Justin", "Mary", "Pauline", "Damien"]);
+    expect(stood.hasBots, isFalse);
+    expect(stood.standIns[1]["who"], "Ralph");
+    expect(stood.standIns[2]["who"], "computer");
+    expect(stood.toJson().containsKey("handId"), isTrue);
+    expect(stood.toJson().containsKey("bots"), isTrue);
     expect(roundWinnerName(["Justin", "Mary"], [12, 12], false), isNull);
     expect(roundWinnerName(["Justin", "Mary"], [12, 12], true), "Justin, Mary");
     expect(body.bonuses, [

@@ -66,13 +66,15 @@ class _TableChatSheetState extends State<TableChatSheet> {
                           for (final line in messages)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 8),
-                              child: Text.rich(TextSpan(children: [
-                                TextSpan(
-                                  text: line.viewer ? "${line.name} (viewer)" : line.name,
-                                  style: const TextStyle(fontWeight: FontWeight.w800, color: gold),
-                                ),
-                                TextSpan(text: "  ${line.text}"),
-                              ])),
+                              child: line.notice
+                                  ? Text(line.text, style: const TextStyle(color: gold, fontWeight: FontWeight.w700))
+                                  : Text.rich(TextSpan(children: [
+                                      TextSpan(
+                                        text: line.viewer ? "${line.name} (viewer)" : line.name,
+                                        style: const TextStyle(fontWeight: FontWeight.w800, color: gold),
+                                      ),
+                                      TextSpan(text: "  ${line.text}"),
+                                    ])),
                             ),
                         ],
                       ),
