@@ -23,7 +23,7 @@ The house rules are in [RULES.md](RULES.md).
 | `supabase/migrations/` | `001_init.sql` through `008_stand_ins.sql`. |
 | `rules/test/rules.test.ts` | Node tests for the TypeScript rules. |
 | `.github/workflows/pages.yml` | Builds the web app from source and publishes `gh-pages`, leaving the `test/` folder in place. |
-| `.github/workflows/test-preview.yml` | Builds `v1.5-dev` into `gh-pages/test/` only. |
+| `.github/workflows/test-preview.yml` | Builds a preview branch into `gh-pages/test/` only. Live stays put. |
 | `.github/workflows/keep-awake.yml` | Pings Supabase on Sunday and Wednesday. |
 
 The Dart and TypeScript engines are two copies. If you change a rule, change both, then run both test suites.
@@ -99,7 +99,7 @@ A push to `main` runs **Publish the web app** (`.github/workflows/pages.yml`). I
 
 `gh-pages` is what [https://tuen.github.io/big-two/](https://tuen.github.io/big-two/) serves. `main` holds the source.
 
-A push to `v1.5-dev` or `cursor/v1.6-seat-handover-d652` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish.
+A push to `v1.5-dev`, `cursor/v1.6-seat-handover-d652`, or `cursor/keep-preturn-selection-30ab` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish. v1.6 stays on [https://tuen.github.io/big-two/](https://tuen.github.io/big-two/) so it can be kept as the rollback. The v1.6 branch can still publish the previous test build.
 
 On an iPhone or iPad: open the site in Safari, Share, **Add to Home Screen**, then launch **Big Two** from the icon.
 

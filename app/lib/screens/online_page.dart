@@ -199,18 +199,16 @@ class _OnlinePageState extends State<OnlinePage> {
     try {
       final next = await widget.api.call(function, body);
       if (_sound) HapticFeedback.mediumImpact();
-      if (mounted) setState(() => _accept(next));
+      if (mounted) setState(() => _accept(next, played: function == "play"));
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     }
   }
 
-  void _accept(TableSnapshot next) {
+  void _accept(TableSnapshot next, {bool played = false}) {
     final previous = _view;
     final newHand = previous == null || previous.round != next.round || previous.hand != next.hand;
     final cardsChanged = previous == null || previous.yourCards.join(",") != next.yourCards.join(",");
-    final trickWon = previous != null && previous.trick != null && next.trick == null && !newHand;
-    final handEnded = previous != null && previous.status == "playing" && next.status != "playing";
     _view = next;
     _error = null;
     if (newHand || cardsChanged) {
@@ -219,9 +217,15 @@ class _OnlinePageState extends State<OnlinePage> {
       final ids = next.yourCards.toSet();
       _order = [..._order.where(ids.contains), ...next.yourCards.where((id) => !_order.contains(id))];
     }
-    if (dropSelection(newHand: newHand, cardsChanged: cardsChanged, trickWon: trickWon, handEnded: handEnded)) {
-      _selected.clear();
-    }
+    final kept = retainSelection(
+      selected: _selected,
+      hand: next.yourCards,
+      newHand: previous != null && (previous.round != next.round || previous.hand != next.hand),
+      played: played,
+    );
+    _selected
+      ..clear()
+      ..addAll(kept);
     _noteChat(next);
     _chatTick.value++;
     _syncReel(previous, next);
