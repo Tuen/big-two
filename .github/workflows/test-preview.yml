@@ -2,7 +2,7 @@ name: Publish the test preview
 
 on:
   push:
-    branches: [v1.5-dev, cursor/v1.6-seat-handover-d652]
+    branches: [v1.5-dev, cursor/v1.6-seat-handover-d652, cursor/keep-preturn-selection-30ab]
   workflow_dispatch:
 
 permissions:

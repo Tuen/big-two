@@ -694,6 +694,7 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
             children: [
               for (var index = 0; index < count; index++)
                 Positioned(
+                  key: ValueKey(widget.hand[index].id),
                   left: _fanLeft(width, cardWidth, gap, index, t),
                   bottom: (1 - t) * 12,
                   child: Opacity(
