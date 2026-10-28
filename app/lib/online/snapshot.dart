@@ -7,6 +7,8 @@ class SeatInfo {
   final String? userId;
   final bool isBot;
   final String? difficulty;
+  final String? standIn;
+  final String? standInName;
   const SeatInfo({
     required this.seat,
     required this.name,
@@ -14,6 +16,8 @@ class SeatInfo {
     required this.userId,
     this.isBot = false,
     this.difficulty,
+    this.standIn,
+    this.standInName,
   });
 }
 
@@ -71,6 +75,7 @@ class HistoryHand {
   final String? scoreStatus;
   final bool hasBots;
   final List<String> bots;
+  final List<Map<String, dynamic>> standIns;
   final String commitment;
   final String deckReveal;
   const HistoryHand({
@@ -86,6 +91,7 @@ class HistoryHand {
     required this.scoreStatus,
     this.hasBots = false,
     this.bots = const [],
+    this.standIns = const [],
     required this.commitment,
     required this.deckReveal,
   });
@@ -96,7 +102,14 @@ class ChatLine {
   final String name;
   final bool viewer;
   final String text;
-  const ChatLine({required this.id, required this.name, required this.viewer, required this.text});
+  final bool notice;
+  const ChatLine({
+    required this.id,
+    required this.name,
+    required this.viewer,
+    required this.text,
+    this.notice = false,
+  });
 }
 
 class UndoPrompt {
@@ -146,6 +159,7 @@ class TableSnapshot {
   final bool holding;
   final bool watching;
   final int viewerCount;
+  final List<String> watchers;
   final List<ChatLine> chat;
 
   const TableSnapshot({
@@ -182,6 +196,7 @@ class TableSnapshot {
     this.holding = false,
     this.watching = false,
     this.viewerCount = 0,
+    this.watchers = const [],
     this.chat = const [],
   });
 
@@ -215,6 +230,8 @@ class TableSnapshot {
             userId: _map(seat)["userId"]?.toString(),
             isBot: _map(seat)["isBot"] == true,
             difficulty: _map(seat)["difficulty"]?.toString(),
+            standIn: _map(seat)["standIn"]?.toString(),
+            standInName: _map(seat)["standInName"]?.toString(),
           ),
       ],
       yourCards: [for (final card in (json["yourCards"] as List? ?? const [])) card.toString()],
@@ -259,6 +276,7 @@ class TableSnapshot {
             scoreStatus: _map(row)["scoreStatus"]?.toString(),
             hasBots: _map(row)["hasBots"] == true,
             bots: [for (final name in (_map(row)["bots"] as List? ?? const [])) name.toString()],
+            standIns: [for (final item in (_map(row)["standIns"] as List? ?? const [])) _map(item)],
             commitment: _map(row)["commitment"]?.toString() ?? "",
             deckReveal: _map(row)["deckReveal"]?.toString() ?? "",
           ),
@@ -283,6 +301,7 @@ class TableSnapshot {
       holding: json["holding"] == true,
       watching: json["watching"] == true,
       viewerCount: json["viewerCount"] == null ? 0 : _int(json["viewerCount"]),
+      watchers: [for (final name in (json["watchers"] as List? ?? const [])) name.toString()],
       chat: [
         for (final row in (json["chat"] as List? ?? const []))
           ChatLine(
@@ -290,6 +309,7 @@ class TableSnapshot {
             name: _map(row)["name"]?.toString() ?? "",
             viewer: _map(row)["viewer"] == true,
             text: _map(row)["text"]?.toString() ?? "",
+            notice: _map(row)["notice"] == true,
           ),
       ],
     );

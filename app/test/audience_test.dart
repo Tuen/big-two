@@ -14,6 +14,10 @@ void main() {
     expect(watcherCanAct(watching: true, yourTurn: true, allowed: true), isFalse);
     expect(watcherCanAct(watching: false, yourTurn: true, allowed: true), isTrue);
     expect(watcherCanAct(watching: false, yourTurn: false, allowed: true), isFalse);
+    expect(watchingLine(["Ralph", "Ada"]), "Watching: Ralph, Ada");
+    expect(watchingLine(const []), isNull);
+    expect(audienceLabel(names: const ["Ralph"], count: 1), "Watching: Ralph");
+    expect(audienceLabel(names: const [], count: 2), "2 watching");
   });
 
   testWidgets("a full table offers Watch this game and Cancel", (tester) async {

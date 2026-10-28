@@ -20,3 +20,18 @@ int unreadChat(List<int> ids, int? seen) {
 bool watcherCanAct({required bool watching, required bool yourTurn, required bool allowed}) {
   return !watching && yourTurn && allowed;
 }
+
+/// "Watching: Ralph, Ada", in the order they started. Null when nobody is watching.
+String? watchingLine(List<String> names) {
+  if (names.isEmpty) return null;
+  return "Watching: ${names.join(", ")}";
+}
+
+/// Older servers only sent a count. Prefer the names when we have them.
+String? audienceLabel({required List<String> names, required int count}) {
+  final line = watchingLine(names);
+  if (line != null) return line;
+  if (count == 1) return "1 watching";
+  if (count > 1) return "$count watching";
+  return null;
+}

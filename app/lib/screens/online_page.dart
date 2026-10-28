@@ -82,6 +82,7 @@ class _OnlinePageState extends State<OnlinePage> {
   int _dealToken = 0;
   String _trickOrigin = "";
   late bool _sound;
+  bool _left = false;
   String? _dealCue;
   String? _turnCue;
   String? _endCue;
@@ -99,6 +100,7 @@ class _OnlinePageState extends State<OnlinePage> {
 
   @override
   void dispose() {
+    // Closing the page does not exit the seat. Only the Exit button does.
     _poll?.cancel();
     _clock?.cancel();
     _pace?.cancel();
@@ -154,7 +156,7 @@ class _OnlinePageState extends State<OnlinePage> {
 
   void _listen(String tableId) {
     _poll?.cancel();
-    _poll = Timer.periodic(const Duration(seconds: 8), (_) => _refresh());
+    _poll = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
     _channel = widget.api.client
         .channel("table-$tableId")
         .onPostgresChanges(
@@ -235,14 +237,7 @@ class _OnlinePageState extends State<OnlinePage> {
   int _unread(TableSnapshot view) => unreadChat([for (final line in view.chat) line.id], _chatSeen);
 
   String? _audience(TableSnapshot view) {
-    final count = view.viewerCount;
-    final bits = <String>[
-      if (view.watching) "Watching",
-      if (count == 1) "1 watching",
-      if (count > 1) "$count watching",
-    ];
-    if (bits.isEmpty) return null;
-    return bits.join(" · ");
+    return audienceLabel(names: view.watchers, count: view.viewerCount);
   }
 
   Widget _chatAction(TableSnapshot view) {
@@ -610,13 +605,40 @@ class _OnlinePageState extends State<OnlinePage> {
     final playing = view?.status == "playing";
     final dealt = playing == true || view?.status == "hand_end" || view?.status == "round_end";
     final roundOver = view?.roundOver == true || view?.status == "round_end";
+    final inGame = view != null &&
+        !view.watching &&
+        shouldWarnBeforeLeaving(dealt: dealt, handInProgress: playing == true, roundOver: roundOver);
     return LeaveGate(
-      warn: view != null &&
-          !view.watching &&
-          shouldWarnBeforeLeaving(dealt: dealt, handInProgress: playing == true, roundOver: roundOver),
+      warn: inGame && !_left,
       host: host,
+      title: inGame ? seatHeldTitle : null,
+      message: inGame ? seatHeldMessage : null,
       child: page,
     );
+  }
+
+  Future<void> _exitTable(TableSnapshot view) async {
+    final playing = view.status == "playing";
+    final dealt = playing || view.status == "hand_end" || view.status == "round_end";
+    final roundOver = view.roundOver || view.status == "round_end";
+    final inGame = !view.watching &&
+        shouldWarnBeforeLeaving(dealt: dealt, handInProgress: playing, roundOver: roundOver);
+    final leave = view.watching
+        ? await confirmStopWatching(context)
+        : inGame
+            ? await confirmExit(context)
+            : await confirmLobbyExit(context);
+    if (!leave || !mounted) return;
+    try {
+      await widget.api.leave(view.tableId);
+      if (!mounted) return;
+      setState(() => _left = true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).pop();
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    }
   }
 
   Widget _errorBox() {
@@ -639,7 +661,10 @@ class _OnlinePageState extends State<OnlinePage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(view.watching ? "Watching" : (full ? "Set the seating" : "Waiting for four")),
-        actions: [_chatAction(view)],
+        actions: [
+          TextButton(key: const Key("exit-table"), onPressed: () => _exitTable(view), child: const Text("Exit")),
+          _chatAction(view),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(24),
@@ -652,7 +677,7 @@ class _OnlinePageState extends State<OnlinePage> {
           Text(view.message, style: const TextStyle(fontSize: 18)),
           if (_audience(view) != null) ...[
             const SizedBox(height: 8),
-            Text(_audience(view)!, style: const TextStyle(fontSize: 16, color: gold, fontWeight: FontWeight.w700)),
+            Text(_audience(view)!, key: const Key("watching-list"), style: const TextStyle(fontSize: 16, color: gold, fontWeight: FontWeight.w700)),
           ],
           const SizedBox(height: 8),
           for (var index = 0; index < view.seats.length; index++) _seatRow(view, index, host),
@@ -751,7 +776,9 @@ class _OnlinePageState extends State<OnlinePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(seat.name == null ? "Empty seat" : _seatTitle(seat), style: const TextStyle(fontSize: 22)),
-                if (seat.isBot)
+                if (_standInDetail(seat) != null)
+                  Text(_standInDetail(seat)!, style: const TextStyle(fontSize: 14, color: gold)),
+                if (seat.isBot && seat.standIn == null)
                   Text("Computer · ${_difficultyLabel(seat.difficulty)}", style: const TextStyle(fontSize: 14)),
                 if (index == 0) const Text("Leads the first hand", style: TextStyle(fontSize: 14)),
               ],
@@ -794,7 +821,16 @@ class _OnlinePageState extends State<OnlinePage> {
 
   String _seatTitle(SeatInfo seat) {
     final name = seat.name ?? "Empty";
+    if (seat.standIn != null) return name;
     return seat.isBot ? "$name 🤖" : name;
+  }
+
+  String? _standInDetail(SeatInfo seat) {
+    if (seat.standIn == "computer") return "Computer";
+    if (seat.standIn == "watcher" && seat.standInName != null && seat.standInName!.isNotEmpty) {
+      return seat.standInName;
+    }
+    return null;
   }
 
   String _difficultyLabel(String? difficulty) {
@@ -986,6 +1022,7 @@ class _OnlinePageState extends State<OnlinePage> {
         onSortRank: () => setState(() => _order = sortCards(parseCards(view.yourCards), "rank").map(formatCard).toList()),
         onSortSuit: () => setState(() => _order = sortCards(parseCards(view.yourCards), "suit").map(formatCard).toList()),
         onScores: () => _scores(view),
+        onExit: () => _exitTable(view),
         chatUnread: _unread(view),
         onChat: () => _openChat(view),
         onToggle: !view.watching && view.status == "playing"
@@ -1027,6 +1064,7 @@ class _OnlinePageState extends State<OnlinePage> {
       turn: turn,
       connected: view.seats[seat].connected,
       passing: _passing(seat),
+      detail: _standInDetail(view.seats[seat]),
     );
   }
 
@@ -1040,7 +1078,13 @@ class _OnlinePageState extends State<OnlinePage> {
     return Scaffold(
       appBar: AppBar(title: Text(view.roundOver ? "Round over" : "Hand over"), actions: [
         if (_audience(view) != null)
-          Center(child: Padding(padding: const EdgeInsets.only(right: 8), child: Text(_audience(view)!, style: const TextStyle(color: gold)))),
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text(_audience(view)!, key: const Key("watching-list"), style: const TextStyle(color: gold)),
+            ),
+          ),
+        TextButton(key: const Key("exit-table"), onPressed: () => _exitTable(view), child: const Text("Exit")),
         _chatAction(view),
         TextButton(onPressed: () => _scores(view), child: const Text("Scores")),
       ]),
@@ -1081,7 +1125,7 @@ class _OnlinePageState extends State<OnlinePage> {
   Future<void> _scores(TableSnapshot view) {
     final names = [for (final seat in view.seats) seat.name == null ? "Empty" : _seatTitle(seat)];
     final matches = view.deckReveal != null && view.commitment != null && commitDeck(parseCards(view.deckReveal!.split(","))).commitment == view.commitment;
-    final practice = view.seats.any((seat) => seat.isBot) || view.history.any((hand) => hand.hasBots);
+    final practice = view.seats.any((seat) => seat.isBot && seat.standIn == null) || view.history.any((hand) => hand.hasBots);
     return showScoreSheet(
       context: context,
       season: view.season,
@@ -1106,9 +1150,21 @@ class _OnlinePageState extends State<OnlinePage> {
             bonuses: hand.bonuses.map((bonus) => "${bonus["player"]} ${bonus["combo"]} +${bonus["pointsEach"]}").join("; "),
             roundOver: hand.roundOver,
             scoreStatus: hand.scoreStatus,
+            standInNote: _standInNote(hand.players, hand.standIns),
           ),
       ],
     );
+  }
+
+  String _standInNote(List<String> players, List<Map<String, dynamic>> standIns) {
+    final bits = <String>[];
+    for (var seat = 0; seat < standIns.length && seat < players.length; seat++) {
+      final played = standIns[seat]["played"] == true;
+      final who = standIns[seat]["who"]?.toString();
+      if (played && who != null && who.isNotEmpty) bits.add("${players[seat]}: $who");
+    }
+    if (bits.isEmpty) return "";
+    return "Stand-in played: ${bits.join("; ")}";
   }
 
   String? _scoreLine(TableSnapshot view) {

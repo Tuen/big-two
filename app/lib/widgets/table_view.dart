@@ -12,6 +12,7 @@ class SeatSpot {
   final bool turn;
   final bool connected;
   final bool passing;
+  final String? detail;
   const SeatSpot({
     required this.name,
     required this.cardsLeft,
@@ -19,6 +20,7 @@ class SeatSpot {
     required this.turn,
     this.connected = true,
     this.passing = false,
+    this.detail,
   });
 }
 
@@ -54,6 +56,7 @@ class TableView extends StatefulWidget {
   final VoidCallback onSortRank;
   final VoidCallback onSortSuit;
   final VoidCallback onScores;
+  final VoidCallback? onExit;
   final int chatUnread;
   final VoidCallback? onChat;
   final ValueChanged<String> onToggle;
@@ -92,6 +95,7 @@ class TableView extends StatefulWidget {
     required this.onSortRank,
     required this.onSortSuit,
     required this.onScores,
+    this.onExit,
     this.chatUnread = 0,
     this.onChat,
     required this.onToggle,
@@ -438,6 +442,13 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
             onPressed: () => Navigator.of(context).maybePop(),
             icon: const Icon(Icons.arrow_back, color: Colors.white, size: 22),
           ),
+          if (widget.onExit != null)
+            TextButton(
+              key: const Key("exit-table"),
+              style: buttonStyle,
+              onPressed: widget.onExit,
+              child: Text("Exit", style: TextStyle(color: gold, fontSize: size, fontWeight: FontWeight.w800)),
+            ),
           Expanded(
             child: FittedBox(
               fit: BoxFit.scaleDown,
@@ -543,6 +554,14 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: compact ? 13 : 18, fontWeight: FontWeight.w800),
               ),
+              if (seat.detail != null)
+                Text(
+                  seat.detail!,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: compact ? 11 : 13, color: gold, fontWeight: FontWeight.w700),
+                ),
               Text(
                 compact ? "${seat.cardsLeft} · ${seat.total} pts" : "${seat.cardsLeft} cards",
                 maxLines: 1,

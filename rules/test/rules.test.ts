@@ -495,6 +495,12 @@ test("the worked example: straight flush, then the hand scores and the round end
   assert.equal(body.roundWinner, "Justin");
   assert.equal(body.hasBots, false);
   assert.deepEqual(body.bots, []);
+  assert.deepEqual(body.standIns, [
+    { played: false, who: null },
+    { played: false, who: null },
+    { played: false, who: null },
+    { played: false, who: null },
+  ]);
   assert.equal(roundWinnerName(["Justin", "Mary"], [12, 12], false), null);
   assert.equal(roundWinnerName(["Justin", "Mary"], [12, 12], true), "Justin, Mary");
 });

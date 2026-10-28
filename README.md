@@ -20,7 +20,7 @@ The house rules are in [RULES.md](RULES.md).
 | `app/public-client.json` | Public Supabase URL and publishable key. The Pages workflow passes this to the web build. |
 | `supabase/functions/_shared/rules/` | The same rules in TypeScript. Edge Functions play the hand from this code. |
 | `supabase/functions/` | `table`, `deal`, `play`, `pass`, `tick`, `ping`, and `home`. |
-| `supabase/migrations/` | `001_init.sql` through `006_pause_and_move_log.sql`. |
+| `supabase/migrations/` | `001_init.sql` through `008_stand_ins.sql`. |
 | `rules/test/rules.test.ts` | Node tests for the TypeScript rules. |
 | `.github/workflows/pages.yml` | Builds the web app from source and publishes `gh-pages`, leaving the `test/` folder in place. |
 | `.github/workflows/test-preview.yml` | Builds `v1.5-dev` into `gh-pages/test/` only. |
@@ -99,7 +99,7 @@ A push to `main` runs **Publish the web app** (`.github/workflows/pages.yml`). I
 
 `gh-pages` is what [https://tuen.github.io/big-two/](https://tuen.github.io/big-two/) serves. `main` holds the source.
 
-A push to `v1.5-dev` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish.
+A push to `v1.5-dev` or `cursor/v1.6-seat-handover-d652` runs **Publish the test preview** (`.github/workflows/test-preview.yml`). It builds that branch with `--base-href /big-two/test/` and `--dart-define=TEST_PREVIEW=true`, then replaces only the `test/` folder on `gh-pages`. Open [https://tuen.github.io/big-two/test/](https://tuen.github.io/big-two/test/). That copy shows a red TEST VERSION banner across the top. The live page is not part of that publish.
 
 On an iPhone or iPad: open the site in Safari, Share, **Add to Home Screen**, then launch **Big Two** from the icon.
 
@@ -111,7 +111,7 @@ A free Supabase project pauses after about seven days without API traffic. `.git
 
 `ping` writes one row in `keep_alive`. That write is the activity. Someone opening the app also counts. If the project is already paused, restore it in the dashboard. The ping cannot wake a paused project.
 
-The turn timer is not a sleeping job. Any open client calls `tick` about every 8 seconds. If everybody has closed the app, a timed-out turn waits until someone opens the table again.
+The turn timer is not a sleeping job. Any open client calls `tick` about every 2 seconds, so the watching list stays current. If everybody has closed the app, a timed-out turn waits until someone opens the table again. Closing the app does not free a seat.
 
 ## The table
 
@@ -130,7 +130,9 @@ Settings, with the defaults:
 
 In the lobby the host can shuffle seats, move a player up or down, and rename a seated player. A name is at most 24 characters.
 
-If the table already has four players, **Join** offers **Watch this game**. A viewer sees the cards that have been played, each player's count, and the scores. They never see a hand. They cannot play, pass, or vote on undo, and they are not one of the four players, so they do not change the score. The table shows **Watching** and how many people are watching.
+If the table already has four players, **Join** offers **Watch this game**. A viewer sees the cards that have been played, each player's count, and the scores. They never see a hand. They cannot play, pass, or vote on undo, and they are not one of the four players, so they do not change the score. The table shows **Watching:** and each watcher's name, in the order they started watching. Players and watchers both see that list.
+
+**Exit** is the only way to leave a seat. Going back, closing the app, or dropping the connection keeps the seat exactly as it was. There is no timeout. During a game, Exit gives the seat to the watcher who started watching first, with that seat's cards, score, and turn, including in the middle of a turn. If nobody is watching, a computer takes the seat and plays on. The score stays under the original player's name. A stand-in does not turn the hand into a practice game. The table chat says who left and who took the seat. Someone who pressed Exit can rejoin the same table with the same name, ignoring capitals, and takes that seat back at once. A watcher who was moved out goes back to watching, in their old place in the list. In the lobby, before any hand, Exit frees the seat instead.
 
 **Chat** is for that table. Players and viewers can both use it. A viewer's name is marked as a viewer. A message is at most 200 characters. Hide the chat so it does not cover the cards; a small badge shows new messages while it is hidden. The chat clears when the round ends.
 
@@ -178,11 +180,17 @@ The score sheet and the hand-over screen show **Scores sent ✓**, **Scores fail
   "roundOver": true,
   "roundWinner": "Justin",
   "hasBots": false,
-  "bots": []
+  "bots": [],
+  "standIns": [
+    { "played": false, "who": null },
+    { "played": true, "who": "Ralph" },
+    { "played": true, "who": "computer" },
+    { "played": false, "who": null }
+  ]
 }
 ```
 
-`date` is the calendar date in the table's timezone. `handPoints` is card points plus bonuses that player was given during the hand. In the example, cards left of 0, 11, 9, and 4 are worth 0, 22, 9, and 4. Damien's straight flush added 8 to the other three, which is why their hand points are 8, 30, 17, and 4. `roundWinner` is null until the round is over. If two players share the lowest total, the names are joined in seat order, such as `"Justin, Mary"`. `hasBots` is true when the hand included a computer player, and `bots` lists those display names. An all-human hand sends false and an empty list.
+`date` is the calendar date in the table's timezone. `handPoints` is card points plus bonuses that player was given during the hand. In the example, cards left of 0, 11, 9, and 4 are worth 0, 22, 9, and 4. Damien's straight flush added 8 to the other three, which is why their hand points are 8, 30, 17, and 4. `roundWinner` is null until the round is over. If two players share the lowest total, the names are joined in seat order, such as `"Justin, Mary"`. `hasBots` is true when the hand included a computer player added in the lobby, and `bots` lists those display names. An all-human hand sends false and an empty list. A stand-in does not set `hasBots`. `standIns` is one entry per seat: `played` is true when a watcher or a computer sat in for that hand, and `who` is the watcher name, `computer`, or both in the order they sat. The `players` names stay the original names. Every field that was already there is unchanged.
 
 **Scores → Export round as CSV** still copies a sheet you can paste into Excel. The snackbar says "Round CSV copied. Paste it into Excel."
 

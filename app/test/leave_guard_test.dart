@@ -1,4 +1,7 @@
 import "package:big_two/widgets/leave_guard.dart";
+import "package:big_two/widgets/table_view.dart";
+import "package:big_two/rules/cards.dart";
+import "package:big_two/theme.dart";
 import "package:flutter/material.dart";
 import "package:flutter_test/flutter_test.dart";
 
@@ -61,6 +64,79 @@ void main() {
     await _back(tester);
     expect(find.text(leaveTitle), findsNothing);
     expect(find.text("open"), findsOneWidget);
+  });
+
+  testWidgets("going back keeps the seat, and Exit is a separate button", (tester) async {
+    var exited = false;
+    await tester.pumpWidget(MaterialApp(
+      theme: bigTwoTheme(),
+      home: LeaveGate(
+        warn: true,
+        host: false,
+        title: seatHeldTitle,
+        message: seatHeldMessage,
+        child: Scaffold(
+          body: TableView(
+            bottom: const SeatSpot(name: "Mary", cardsLeft: 13, total: 0, turn: true, detail: "Ralph"),
+            left: const SeatSpot(name: "Justin", cardsLeft: 13, total: 0, turn: false),
+            top: const SeatSpot(name: "Pauline", cardsLeft: 13, total: 0, turn: false),
+            right: const SeatSpot(name: "Damien", cardsLeft: 13, total: 0, turn: false),
+            hand: [parseCard("3D")],
+            selected: const {},
+            trick: const [],
+            trickLabel: null,
+            trickPlayer: null,
+            yourTurn: true,
+            canPlay: true,
+            canPass: true,
+            passLabel: "Pass",
+            reason: null,
+            banner: "Watching: Ralph",
+            onPlay: () {},
+            onPass: () {},
+            onSortRank: () {},
+            onSortSuit: () {},
+            onScores: () {},
+            onExit: () => exited = true,
+            onToggle: (_) {},
+            onReorder: (_, __) {},
+          ),
+        ),
+      ),
+    ));
+    expect(find.text("Watching: Ralph"), findsOneWidget);
+    expect(find.text("Ralph"), findsOneWidget);
+    expect(find.byKey(const Key("exit-table")), findsOneWidget);
+    await tester.tap(find.byTooltip("Back"));
+    await tester.pumpAndSettle();
+    expect(find.text(seatHeldTitle), findsOneWidget);
+    expect(find.text(seatHeldMessage), findsOneWidget);
+    expect(exited, isFalse);
+    await tester.tap(find.byKey(const Key("stay-in-game")));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key("exit-table")));
+    await tester.pumpAndSettle();
+    expect(exited, isTrue);
+    expect(find.text(exitTitle), findsNothing);
+  });
+
+  testWidgets("confirming Exit is not the same as going back", (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => TextButton(
+          onPressed: () => confirmExit(context),
+          child: const Text("ask"),
+        ),
+      ),
+    ));
+    await tester.tap(find.text("ask"));
+    await tester.pumpAndSettle();
+    expect(find.text(exitTitle), findsOneWidget);
+    expect(find.text(exitMessage), findsOneWidget);
+    expect(find.byKey(const Key("confirm-exit")), findsOneWidget);
+    await tester.tap(find.byKey(const Key("stay-in-game")));
+    await tester.pumpAndSettle();
+    expect(find.text(exitTitle), findsNothing);
   });
 }
 

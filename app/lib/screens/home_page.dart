@@ -201,7 +201,7 @@ class TestVersionBanner extends StatelessWidget {
         height: 28,
         child: Center(
           child: Text(
-            "TEST VERSION · v1.5",
+            "TEST VERSION · v1.6",
             style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.4),
           ),
         ),

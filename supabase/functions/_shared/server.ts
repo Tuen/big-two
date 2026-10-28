@@ -31,8 +31,10 @@ import {
   freshViewers,
   VIEWER_CAP,
   visibleChat,
+  watchingNames,
   type ChatLine,
 } from "./audience.ts";
+import { scoringBotNames, standInsAtDeal, standInsForWebhook } from "./stand_in.ts";
 import {
   isLoneTwoOfSpades,
   MOVE_UNDONE,
@@ -460,12 +462,12 @@ async function touchViewer(admin: SupabaseClient, tableId: string, userId: strin
   if (error) throw new HttpError(500, error.message);
 }
 
-async function audienceOf(admin: SupabaseClient, table: Row): Promise<{ viewerCount: number; chat: ChatLine[] }> {
-  const { data: viewers, error } = await admin.from("table_viewers").select("last_seen").eq("table_id", table.id);
+async function audienceOf(admin: SupabaseClient, table: Row): Promise<{ viewerCount: number; chat: ChatLine[]; watchers: string[] }> {
+  const { data: viewers, error } = await admin.from("table_viewers").select("user_id, last_seen, display_name, joined_at").eq("table_id", table.id);
   if (error) throw new HttpError(500, error.message);
   const { data: messages, error: messageError } = await admin
     .from("table_messages")
-    .select("id, display_name, viewer, body")
+    .select("id, display_name, viewer, body, notice")
     .eq("table_id", table.id)
     .eq("round_number", table.round_number)
     .order("id", { ascending: false })
@@ -476,10 +478,13 @@ async function audienceOf(admin: SupabaseClient, table: Row): Promise<{ viewerCo
     name: String(row.display_name),
     viewer: Boolean(row.viewer),
     text: String(row.body),
+    notice: Boolean(row.notice),
   }));
+  const watchers = watchingNames((viewers ?? []) as { last_seen: string; display_name?: string; joined_at?: string; user_id?: string }[]);
   return {
-    viewerCount: freshViewers((viewers ?? []) as { last_seen: string }[]).length,
+    viewerCount: watchers.length,
     chat: visibleChat(lines, table.status === "round_end"),
+    watchers,
   };
 }
 
@@ -491,9 +496,9 @@ async function clearChat(admin: SupabaseClient, tableId: string): Promise<void> 
 function withAudience<T extends Record<string, unknown>>(
   view: T,
   watching: boolean,
-  audience: { viewerCount: number; chat: ChatLine[] },
+  audience: { viewerCount: number; chat: ChatLine[]; watchers: string[] },
 ): T {
-  const shared = { ...view, viewerCount: audience.viewerCount, chat: audience.chat };
+  const shared = { ...view, viewerCount: audience.viewerCount, chat: audience.chat, watchers: audience.watchers };
   if (!watching) return clipSpectator(shared, false);
   const seats = Array.isArray(shared.seats)
     ? shared.seats.map((seat) => ({ ...(seat as Row), userId: null }))
@@ -520,7 +525,7 @@ type Bundle = {
   hand: Row | null;
   secret: string | null;
   events: Row[];
-  viewers: { user_id?: string; last_seen: string }[];
+  viewers: { user_id?: string; last_seen: string; display_name?: string; joined_at?: string }[];
   messages: Row[];
   results: Row[];
 };
@@ -611,6 +616,7 @@ function resultJson(row: Row) {
     scoreStatus: row.webhook_status ?? null,
     hasBots: Boolean(row.has_bots),
     bots: Array.isArray(row.bots) ? row.bots.map((name: unknown) => String(name)) : [],
+    standIns: Array.isArray(row.stand_ins) ? row.stand_ins : [],
   };
 }
 
@@ -637,10 +643,13 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
     name: String(row.display_name),
     viewer: Boolean(row.viewer),
     text: String(row.body),
+    notice: Boolean(row.notice),
   }));
+  const watchers = watchingNames(bundle.viewers);
   const audience = {
-    viewerCount: freshViewers(bundle.viewers).length,
+    viewerCount: watchers.length > 0 ? watchers.length : freshViewers(bundle.viewers).length,
     chat: visibleChat(lines, table.status === "round_end"),
+    watchers,
   };
   const watching = me == null;
   const seatIndex = me?.seat_index ?? 0;
@@ -666,7 +675,9 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
             connected: Boolean(seat.is_bot) || seat.user_id === userId || connected(seat),
             userId: seat.user_id,
             isBot: Boolean(seat.is_bot),
-            difficulty: seat.is_bot ? seat.bot_difficulty : null,
+            difficulty: seat.is_bot && !seat.stand_in ? seat.bot_difficulty : null,
+            standIn: seat.stand_in ?? null,
+            standInName: seat.stand_in_name ?? null,
           }
         : { seat: index, name: null, connected: false, userId: null, isBot: false, difficulty: null };
     }),
@@ -833,6 +844,8 @@ async function saveProjection(
     const result = step.result;
     const date = formatDate(new Date(), settingsOf(table).timezone);
     const bots = botNames(seats);
+    const { data: freshStand } = await admin.from("hands").select("stand_ins").eq("id", hand.id).maybeSingle();
+    const standIns = standInsForWebhook(freshStand?.stand_ins ?? hand.stand_ins, seats);
     const body: WebhookPayload = webhookPayload({
       handId: hand.id,
       tableCode: table.code,
@@ -848,6 +861,7 @@ async function saveProjection(
       bonuses: result.bonuses,
       hasBots: bots.length > 0,
       bots,
+      standIns,
     });
     patch.deck_reveal = deckText;
     patch.round_over = result.roundOver;
@@ -871,6 +885,7 @@ async function saveProjection(
       webhook_status: "pending",
       has_bots: body.hasBots,
       bots: body.bots,
+      stand_ins: body.standIns,
     });
     if (resultError) throw new HttpError(500, resultError.message);
     const { error: tableError } = await admin
@@ -1062,6 +1077,7 @@ async function dealHand(admin: SupabaseClient, table: Row, seats: Row[], userId:
       commitment: committed.commitment,
       status: "playing",
       last_message: "Deal",
+      stand_ins: standInsAtDeal(seats),
     })
     .select("*")
     .single();
@@ -1501,10 +1517,7 @@ async function act(
 const BOT_NAMES = ["Bot Ruby", "Bot Jade", "Bot Pearl", "Bot Amber"];
 
 function botNames(seats: Row[]): string[] {
-  return seats
-    .filter((seat) => seat.is_bot)
-    .sort((a, b) => a.seat_index - b.seat_index)
-    .map((seat) => String(seat.display_name));
+  return scoringBotNames(seats);
 }
 
 function nextBotName(seats: Row[]): string {
@@ -1625,6 +1638,18 @@ async function writeSeatOrder(admin: SupabaseClient, tableId: string, order: (st
   throw new HttpError(known ? 400 : 500, known ?? "Could not change the seating. Try again.");
 }
 
+function rpcJson(data: unknown): Row {
+  if (typeof data === "string") {
+    try {
+      return JSON.parse(data) as Row;
+    } catch {
+      return {};
+    }
+  }
+  if (data && typeof data === "object") return data as Row;
+  return {};
+}
+
 export async function handleTable(req: Request): Promise<Response> {
   const userId = await requireUser(req);
   const body = await readBody(req);
@@ -1641,6 +1666,7 @@ export async function handleTable(req: Request): Promise<Response> {
         .insert({
           code: roomCode(),
           host_id: userId,
+          host_name: name,
           settings,
           season: settings.season,
           round_number: settings.firstRoundNumber,
@@ -1677,8 +1703,24 @@ export async function handleTable(req: Request): Promise<Response> {
         .eq("table_id", table.id)
         .eq("user_id", userId);
       if (renameError) throw new HttpError(500, renameError.message);
+      if (table.host_id === userId) {
+        const { error: hostError } = await admin.from("game_tables").update({ host_name: name }).eq("id", table.id);
+        if (hostError) throw new HttpError(500, hostError.message);
+      }
     }
     if (!mine) {
+      const { data: reclaimed, error: reclaimError } = await admin.rpc("reclaim_seat", {
+        p_table: table.id,
+        p_user: userId,
+        p_name: name,
+      });
+      if (reclaimError) {
+        const message = String(reclaimError.message ?? "");
+        const missing = /could not find the function/i.test(message) || /schema cache/i.test(message);
+        if (!missing) throw new HttpError(500, message);
+      } else if (rpcJson(reclaimed).reclaimed === true) {
+        return json({ view: await buildView(admin, table.id, userId) });
+      }
       if (table.status !== "lobby") throw new HttpError(400, "That table has already started");
       if (seats.length >= 4) throw new HttpError(400, "That table is full");
       const taken = new Set(seats.map((seat) => seat.seat_index));
@@ -1732,6 +1774,15 @@ export async function handleTable(req: Request): Promise<Response> {
 
   if (action === "state" || action === "heartbeat") {
     return json({ view: await buildView(admin, tableId, userId) });
+  }
+
+  if (action === "exit") {
+    const { data, error } = await admin.rpc("exit_seat", { p_table: tableId, p_user: userId });
+    if (error) throw new HttpError(500, error.message);
+    const result = rpcJson(data);
+    if (result.kind === "absent") throw new HttpError(403, "You are not at this table");
+    if (result.taker === "computer") await runBots(admin, tableId);
+    return json({ left: true, notice: result.notice ?? null });
   }
 
   if (action === "chat") {
@@ -1831,6 +1882,7 @@ export async function handleTable(req: Request): Promise<Response> {
     const seat = seats.find((item) => item.seat_index === seatIndex);
     if (!seat) throw new HttpError(400, "That seat is empty");
     if (!seat.is_bot) throw new HttpError(400, "Only a computer player can be removed this way");
+    if (seat.stand_in) throw new HttpError(400, "That computer is holding a seat for someone who left");
     const { error } = await admin.from("seats").delete().eq("table_id", tableId).eq("seat_index", seatIndex).eq("is_bot", true);
     if (error) throw new HttpError(500, error.message);
     return json({ view: await buildView(admin, tableId, userId) });
@@ -1853,6 +1905,11 @@ export async function handleTable(req: Request): Promise<Response> {
       .select("user_id");
     if (error) throw new HttpError(500, error.message);
     if (!data || data.length === 0) throw new HttpError(400, "That seat is empty");
+    const renamed = data.find((row) => row.user_id === table.host_id);
+    if (renamed) {
+      const { error: hostError } = await admin.from("game_tables").update({ host_name: name }).eq("id", tableId);
+      if (hostError) throw new HttpError(500, hostError.message);
+    }
     return json({ view: await buildView(admin, tableId, userId) });
   }
 

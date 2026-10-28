@@ -85,6 +85,12 @@ export interface WebhookPayload {
   hasBots: boolean;
   /** Display names of the computer players, without an emoji. */
   bots: string[];
+  /**
+   * One entry per seat, in seat order. A stand-in played that hand when
+   * `played` is true. `who` is a watcher name, "computer", or both.
+   * The player names above stay the original names.
+   */
+  standIns: { played: boolean; who: string | null }[];
 }
 
 /** Lowest total, in seat order. A tie lists every name. Null until the round is over. */
@@ -111,7 +117,14 @@ export function webhookPayload(args: {
   bonuses: readonly Bonus[];
   hasBots?: boolean;
   bots?: readonly string[];
+  standIns?: readonly { played: boolean; who: string | null }[];
 }): WebhookPayload {
+  const standIns = args.standIns ?? [
+    { played: false, who: null },
+    { played: false, who: null },
+    { played: false, who: null },
+    { played: false, who: null },
+  ];
   return {
     handId: args.handId,
     tableCode: args.tableCode,
@@ -132,5 +145,6 @@ export function webhookPayload(args: {
     roundWinner: roundWinnerName(args.players, args.runningTotals, args.roundOver),
     hasBots: args.hasBots ?? false,
     bots: [...(args.bots ?? [])],
+    standIns: standIns.map((item) => ({ played: item.played === true, who: item.who ?? null })),
   };
 }

@@ -9,6 +9,33 @@ export interface ChatLine {
   name: string;
   viewer: boolean;
   text: string;
+  notice?: boolean;
+}
+
+export interface WatcherListed {
+  user_id?: string;
+  display_name?: string;
+  last_seen: string;
+  joined_at?: string;
+}
+
+/** Fresh watchers, earliest first. Empty when nobody is watching. */
+export function watchingNames(rows: readonly WatcherListed[], now = Date.now()): string[] {
+  return rows
+    .filter((row) => viewerIsFresh(row.last_seen, now) && String(row.display_name ?? "").trim())
+    .slice()
+    .sort((a, b) => {
+      const at = (Date.parse(a.joined_at ?? "") || 0) - (Date.parse(b.joined_at ?? "") || 0);
+      if (at !== 0) return at;
+      return String(a.user_id ?? "").localeCompare(String(b.user_id ?? ""));
+    })
+    .map((row) => String(row.display_name).trim());
+}
+
+/** "Watching: Ralph, Ada", or null when the list is empty. */
+export function watchingLine(names: readonly string[]): string | null {
+  if (names.length === 0) return null;
+  return `Watching: ${names.join(", ")}`;
 }
 
 export function chatText(value: unknown): { ok: true; text: string } | { ok: false; message: string } {

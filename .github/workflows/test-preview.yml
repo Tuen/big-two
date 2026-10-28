@@ -2,7 +2,7 @@ name: Publish the test preview
 
 on:
   push:
-    branches: [v1.5-dev]
+    branches: [v1.5-dev, cursor/v1.6-seat-handover-d652]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out v1.5-dev
+      - name: Check out the preview branch
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && 'v1.5-dev' || github.sha }}
@@ -37,7 +37,7 @@ jobs:
 
       - name: Test the TypeScript rules
         working-directory: rules
-        run: node --experimental-strip-types --test --test-concurrency=1 test/rules.test.ts test/bots.test.ts test/recent.test.ts test/undo.test.ts test/autopass.test.ts test/clash.test.ts test/audience.test.ts
+        run: node --experimental-strip-types --test --test-concurrency=1 test/rules.test.ts test/bots.test.ts test/recent.test.ts test/undo.test.ts test/autopass.test.ts test/clash.test.ts test/audience.test.ts test/stand_in.test.ts
 
       - name: Test the Flutter app
         working-directory: app
