@@ -696,7 +696,7 @@ void main() {
     expect(won.state.winner, 0);
   });
 
-  test("a follower with no legal play is an auto-pass, and a leader is not", () {
+  test("only the single 2 of spades is an auto-pass", () {
     final others = [parseCards(["9C", "4C"]), parseCards(["6H", "7H"]), parseCards(["8D", "TD"])];
     final pair = makeState(
       hands: [parseCards(["3D", "4C", "5H", "6S", "9C"]), ...others],
@@ -739,7 +739,27 @@ void main() {
       trickCards: ["5D"],
     );
     expect(automaticLastCard(onlyTwo, 0, settings), isNull);
-    expect(shouldAutoPass(onlyTwo, 0, settings), isTrue);
+    expect(shouldAutoPass(onlyTwo, 0, settings), isFalse);
+    expect(passIssue(onlyTwo, 0, settings), isNull);
+
+    final twoSpades = makeState(
+      hands: [parseCards(["3D", "4C"]), ...others],
+      turn: 0,
+      trick: mustCombo(["2S"]),
+      trickSeat: 1,
+      trickCards: ["2S"],
+    );
+    expect(shouldAutoPass(twoSpades, 0, settings), isTrue);
+    final ace = makeState(
+      hands: [parseCards(["3D", "4C"]), ...others],
+      turn: 0,
+      trick: mustCombo(["AS"]),
+      trickSeat: 1,
+      trickCards: ["AS"],
+    );
+    expect(legalSelections(ace, 0, settings), isEmpty);
+    expect(shouldAutoPass(ace, 0, settings), isFalse);
+    expect(passIssue(ace, 0, settings), isNull);
 
     final forced = makeState(
       hands: [parseCards(["3C", "AS"]), parseCards(["QS"]), parseCards(["4C", "5C"]), parseCards(["6D", "7D"])],

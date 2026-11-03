@@ -1,6 +1,7 @@
 import { type Card, formatCard, highestCard, parseCards, removeCards, sameCard } from "./cards.ts";
 import { beats, type Combo, family, identify, neededShape } from "./combo.ts";
 import { type Bonus, type HandScore, scoreCounts } from "./score.ts";
+import { isLoneTwoOfSpades } from "../undo.ts";
 
 export interface Settings {
   passLocks: boolean;
@@ -295,9 +296,9 @@ export function automaticLastCard(state: HandState, seat: number, settings: Sett
 }
 
 /**
- * True when this seat is following a trick and no subset of their hand is a legal play.
- * Uses legalSelections, which uses playIssue, so straights, finishing on 2s only,
- * and the one-card highest-single rule are the same checks as a tapped Play.
+ * True only when this seat must beat a single 2 of spades.
+ * Nothing beats that card, so the table passes for them.
+ * Any other trick, including a single they cannot beat, is their own Pass.
  * Never true on a new lead, even when the only cards are 2s. That leader taps Pass.
  */
 export function shouldAutoPass(state: HandState, seat: number, settings: Settings): boolean {
@@ -305,15 +306,15 @@ export function shouldAutoPass(state: HandState, seat: number, settings: Setting
 }
 
 /**
- * Why this seat must not be auto-passed. Null means the latest state still has
- * no legal play for them, and it is still their turn to follow.
+ * Why this seat must not be auto-passed. Null means it is still their turn
+ * and the card they must beat is the single 2 of spades.
  */
 export function autoPassBlock(state: HandState, seat: number, settings: Settings): string | null {
   if (state.status !== "playing") return "the hand is over";
   if (state.turn !== seat) return "it is no longer their turn";
   if (state.trick === null) return "they are leading";
-  if (family(state.trick.kind) !== "single") return "only a single card is auto-passed";
   if (legalSelections(state, seat, settings).length > 0) return "they can beat what is on the table";
+  if (!isLoneTwoOfSpades(state.trickCards)) return "only the 2 of spades is auto-passed";
   if (passIssue(state, seat, settings) !== null) return "a pass is not allowed";
   return null;
 }
@@ -354,8 +355,8 @@ export type ServerAutomatic =
 
 /**
  * What the server may do without a phone asking.
- * A last card is played. A follower who cannot beat a single is passed.
- * A pair, triple, or five-card hand is left for the player to pass.
+ * A last card is played. The other players are passed only when the card
+ * to beat is the single 2 of spades. Every other pass is the player's own.
  * A leader, including one who only has 2s, is left alone.
  */
 export function serverAutomatic(state: HandState, settings: Settings): ServerAutomatic | null {

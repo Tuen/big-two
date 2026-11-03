@@ -188,8 +188,9 @@ function playerName(seats: Row[], seat: number): string {
 
 /**
  * Auto-pass is on at every table.
- * It only passes a player who cannot beat a single card.
- * A pair, triple, or five-card hand is never auto-passed.
+ * It passes a player only when the card to beat is the single 2 of spades.
+ * Any other pass, including no legal play, is the player's own button,
+ * or the turn timer when one is on.
  */
 function passesAutomatically(table: Row, _seats: Row[]): boolean {
   if (!rulesV14(table)) return false;

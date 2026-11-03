@@ -91,7 +91,7 @@ Undo puts back only your own last play or pass, and only before the next player 
 
 ## The 2 of spades
 
-A single 2 of spades cannot be beaten. About a second later the other three pass on their own, the lead comes back to the player who played it, and the table says "2♠ – everyone passes". A pair or a five-card hand that merely contains the 2 of spades is not passed automatically.
+A single 2 of spades cannot be beaten. About a second later the other three pass on their own, the lead comes back to the player who played it, and the table says "2♠ – everyone passes". That is the only automatic pass. A single ace, a pair, or a five-card hand is not passed for you, even when you have no legal play: you press Pass, or the turn timer does if one is on. A pair or a five-card hand that merely contains the 2 of spades is not passed automatically.
 
 ## Leading
 

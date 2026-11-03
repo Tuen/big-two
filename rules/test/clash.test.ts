@@ -49,19 +49,20 @@ test("the 2 of spades is not auto-passed against a single 2 of hearts, and it ca
   assert.deepEqual(played.state.trickCards, ["2S"]);
 });
 
-test("a pair, a triple, or a five-card hand is never auto-passed", () => {
-  assert.equal(autoPassBlock(following(["3D", "4D"], ["8C", "8D"]), 0, settings), "only a single card is auto-passed");
-  assert.equal(autoPassBlock(following(["3D"], ["8C", "8D", "8H"]), 0, settings), "only a single card is auto-passed");
+test("a pair, a triple, a five-card hand, or any other single is never auto-passed", () => {
+  assert.equal(autoPassBlock(following(["3D", "4D"], ["8C", "8D"]), 0, settings), "only the 2 of spades is auto-passed");
+  assert.equal(autoPassBlock(following(["3D"], ["8C", "8D", "8H"]), 0, settings), "only the 2 of spades is auto-passed");
   assert.equal(
     autoPassBlock(following(["3D", "4D", "5D", "6D", "9C"], ["3C", "4C", "5C", "6C", "7C"]), 0, settings),
-    "only a single card is auto-passed",
+    "only the 2 of spades is auto-passed",
   );
   assert.equal(legalSelections(following(["3D", "4D"], ["8C", "8D"]), 0, settings).length, 0);
-  assert.equal(autoPassBlock(following(["3D", "4D"], ["AS"]), 0, settings), null);
+  assert.equal(autoPassBlock(following(["3D", "4D"], ["AS"]), 0, settings), "only the 2 of spades is auto-passed");
+  assert.equal(autoPassBlock(following(["3D", "4D"], ["2S"]), 0, settings), null);
 });
 
-test("an auto-pass stands only while it is still that player's turn and they have no play", () => {
-  const stuck = following(["3D", "4D"], ["AS"]);
+test("an auto-pass stands only while the 2 of spades is still that player's turn", () => {
+  const stuck = following(["3D", "4D"], ["2S"]);
   assert.equal(autoPassBlock(stuck, 0, settings), null);
   const played = applyPlay(stuck, 0, ["3D"], settings);
   assert.equal(played.ok, false);
