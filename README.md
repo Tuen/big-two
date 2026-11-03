@@ -20,7 +20,7 @@ The house rules are in [RULES.md](RULES.md).
 | `app/public-client.json` | Public Supabase URL and publishable key. The Pages workflow passes this to the web build. |
 | `supabase/functions/_shared/rules/` | The same rules in TypeScript. Edge Functions play the hand from this code. |
 | `supabase/functions/` | `table`, `deal`, `play`, `pass`, `tick`, `ping`, and `home`. |
-| `supabase/migrations/` | `001_init.sql` through `008_stand_ins.sql`. |
+| `supabase/migrations/` | `001_init.sql` through `009_incremental_results.sql`. |
 | `rules/test/rules.test.ts` | Node tests for the TypeScript rules. |
 | `.github/workflows/pages.yml` | Builds the web app from source and publishes `gh-pages`, leaving the `test/` folder in place. |
 | `.github/workflows/test-preview.yml` | Builds a preview branch into `gh-pages/test/` only. Live stays put. |
@@ -83,7 +83,14 @@ npx supabase db query --linked -f supabase/migrations/003_webhook_log.sql
 npx supabase functions deploy table deal play pass tick ping --use-api
 ```
 
-`001` and `002` are already applied on the live project. Run a migration file again only when you mean to re-apply it. `supabase/config.toml` turns JWT checks on for `table`, `deal`, `play`, `pass`, and `tick`. `ping` and `home` are public.
+`001` and `002` are already applied on the live project. Run a migration file again only when you mean to re-apply it. `009_incremental_results.sql` is the incremental score-sheet read. Apply it before deploying the functions, then deploy:
+
+```powershell
+npx supabase db query --linked -f supabase/migrations/009_incremental_results.sql
+npx supabase functions deploy table deal play pass tick ping --use-api
+```
+
+`supabase/config.toml` turns JWT checks on for `table`, `deal`, `play`, `pass`, and `tick`. `ping` and `home` are public.
 
 Supabase injects `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` into Edge Functions. The service-role key stays there. It does not go in git, in the app, or in GitHub Actions.
 
@@ -91,7 +98,7 @@ Supabase injects `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE
 
 A seated player can read the table, the seats, the hands, the event log, their own cards, and finished results. They cannot read `hand_secrets` (the shuffled deck) and they cannot write any row. Only the Edge Functions write. `webhook_log` is service-role only. Players see the status word (`sent`, `failed`, `skipped`, `pending`, `sending`) on the score sheet.
 
-The app subscribes to hands and seats, then asks `tick` for a fresh view. That view includes `yourCards` for the signed-in seat and a count for everyone else.
+The app subscribes to hands, seats, and the table, then asks `tick` for a fresh view. That view includes `yourCards` for the signed-in seat and a count for everyone else. The first view carries the whole score sheet. Later views send `afterRound` and `afterHand`, and the reply's `history` is only the new or still-reporting hands (`historyDelta`). Apply `009_incremental_results.sql` before deploying the functions that send those arguments. Until that migration is on the database, the functions ask for the whole sheet again.
 
 ## GitHub Pages
 
@@ -111,7 +118,7 @@ A free Supabase project pauses after about seven days without API traffic. `.git
 
 `ping` writes one row in `keep_alive`. That write is the activity. Someone opening the app also counts. If the project is already paused, restore it in the dashboard. The ping cannot wake a paused project.
 
-The turn timer is not a sleeping job. Any open client calls `tick` about every 2 seconds, so the watching list stays current. If everybody has closed the app, a timed-out turn waits until someone opens the table again. Closing the app does not free a seat.
+The turn timer is not a sleeping job. An open client calls `tick` about every 8 seconds, and straight away when the hand, a seat, or the table changes. A hidden tab does not call `tick` until it is visible again. The watching list stays current from those calls. `last_seen` is written again only when it is already 10 seconds old, which still sits inside the 20 second presence window. If everybody has closed the app, a timed-out turn waits until someone opens the table again. Closing the app does not free a seat.
 
 ## The table
 

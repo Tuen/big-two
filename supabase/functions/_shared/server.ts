@@ -43,6 +43,12 @@ import {
   undoOutcome,
   type UndoOpen,
 } from "./undo.ts";
+import {
+  bundleRpcNeedsOldSignature,
+  parseHistoryCursor,
+  seenIsFresh,
+  type HistoryCursor,
+} from "./traffic.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -528,10 +534,33 @@ type Bundle = {
   viewers: { user_id?: string; last_seen: string; display_name?: string; joined_at?: string }[];
   messages: Row[];
   results: Row[];
+  /** True when results are a delta on top of a cursor the client already has. */
+  historyDelta: boolean;
 };
 
-async function loadBundle(admin: SupabaseClient, tableId: string): Promise<Bundle> {
-  const { data, error } = await admin.rpc("load_table_bundle", { p_table: tableId });
+type LoadOptions = {
+  cursor?: HistoryCursor | null;
+  /** False for a move that only needs the live hand, not the score sheet. */
+  results?: boolean;
+};
+
+async function loadBundle(admin: SupabaseClient, tableId: string, options?: LoadOptions): Promise<Bundle> {
+  const cursor = options?.cursor ?? null;
+  const includeResults = options?.results !== false;
+  const args: Record<string, unknown> = { p_table: tableId };
+  if (includeResults && cursor) {
+    args.p_after_round = cursor.round;
+    args.p_after_hand = cursor.hand;
+  }
+  if (!includeResults) args.p_include_results = false;
+  let historyDelta = Boolean(includeResults && cursor);
+  let { data, error } = await admin.rpc("load_table_bundle", args);
+  if (error && (cursor || !includeResults) && bundleRpcNeedsOldSignature(String(error.message ?? ""))) {
+    const again = await admin.rpc("load_table_bundle", { p_table: tableId });
+    data = again.data;
+    error = again.error;
+    historyDelta = false;
+  }
   if (error) throw new HttpError(500, error.message);
   const raw = (typeof data === "string" ? JSON.parse(data) : data ?? {}) as Row;
   if (!raw.table) throw new HttpError(404, "That table does not exist");
@@ -544,7 +573,20 @@ async function loadBundle(admin: SupabaseClient, tableId: string): Promise<Bundl
     viewers: Array.isArray(raw.viewers) ? raw.viewers : [],
     messages: Array.isArray(raw.messages) ? raw.messages : [],
     results: Array.isArray(raw.results) ? raw.results : [],
+    historyDelta,
   };
+}
+
+/** Skip the seat write when this person was already marked present. */
+async function markSeen(admin: SupabaseClient, tableId: string, userId: string, bundle: Bundle): Promise<void> {
+  const seat = bundle.seats.find((item) => item.user_id === userId);
+  if (seat) {
+    if (!seenIsFresh(seat.last_seen)) await touch(admin, tableId, userId);
+    return;
+  }
+  const viewer = bundle.viewers.find((item) => item.user_id === userId);
+  if (!viewer || seenIsFresh(viewer.last_seen)) return;
+  await touchViewer(admin, tableId, userId);
 }
 
 function replayLoaded(hand: Row, secret: string, events: Row[], settings: Settings) {
@@ -620,15 +662,20 @@ function resultJson(row: Row) {
   };
 }
 
-export async function buildView(admin: SupabaseClient, tableId: string, userId: string) {
-  const seen = touch(admin, tableId, userId);
-  let bundle = await loadBundle(admin, tableId);
-  await seen;
+export async function buildView(
+  admin: SupabaseClient,
+  tableId: string,
+  userId: string,
+  options?: { seeded?: Bundle; cursor?: HistoryCursor | null },
+) {
+  const cursor = options?.cursor ?? null;
+  let bundle = options?.seeded ?? await loadBundle(admin, tableId, { cursor });
+  await markSeen(admin, tableId, userId, bundle);
   let table = bundle.table;
-  if (undoOf(table) || (table.settings?.hold && !held(table))) {
+  if (!options?.seeded && (undoOf(table) || (table.settings?.hold && !held(table)))) {
     await clearStaleHold(admin, table);
     await settleUndo(admin, table);
-    bundle = await loadBundle(admin, tableId);
+    bundle = await loadBundle(admin, tableId, { cursor });
     table = bundle.table;
   }
   const seats = bundle.seats;
@@ -636,7 +683,6 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
   if (!me) {
     const viewer = bundle.viewers.find((item) => item.user_id === userId);
     if (!viewer) throw new HttpError(403, "You are not at this table");
-    await touchViewer(admin, tableId, userId);
   }
   const lines = bundle.messages.map((row) => ({
     id: Number(row.id),
@@ -683,6 +729,7 @@ export async function buildView(admin: SupabaseClient, tableId: string, userId: 
     }),
     history,
     archive,
+    historyDelta: bundle.historyDelta === true,
     canDeal: seats.length === 4 && (table.status === "lobby" || table.status === "hand_end"),
     canNewRound: table.status === "round_end",
     canEditSettings: table.status === "lobby" && !hand,
@@ -1321,12 +1368,12 @@ async function act(
   expectSeat?: number,
   seeded?: Bundle,
 ): Promise<boolean> {
-  let bundle = seeded ?? await loadBundle(admin, tableId);
+  let bundle = seeded ?? await loadBundle(admin, tableId, { results: false });
   let table = bundle.table;
   if (undoOf(table) || (table.settings?.hold && !held(table))) {
     await clearStaleHold(admin, table);
     await settleUndo(admin, table);
-    bundle = await loadBundle(admin, tableId);
+    bundle = await loadBundle(admin, tableId, { results: false });
     table = bundle.table;
   }
   if (undoOf(table) || (!autoLast && !autoPass && !allowHeld && held(table))) throw new HttpError(400, "Wait for the undo vote");
@@ -1344,7 +1391,7 @@ async function act(
   if (botSeat != null && !me.is_bot) throw new HttpError(400, "Only a computer player can be moved this way");
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) {
-      bundle = await loadBundle(admin, tableId);
+      bundle = await loadBundle(admin, tableId, { results: false });
       table = bundle.table;
     }
     const hand = bundle.hand;
@@ -1530,28 +1577,28 @@ function botWaiting(table: Row, now = Date.now()): boolean {
   return Number.isFinite(at) && now < at;
 }
 
-async function runBots(admin: SupabaseClient, tableId: string, seeded?: Bundle): Promise<void> {
+async function runBots(admin: SupabaseClient, tableId: string, seeded?: Bundle): Promise<boolean> {
   try {
-    const first = seeded ?? await loadBundle(admin, tableId);
-    if (botWaiting(first.table)) return;
+    const first = seeded ?? await loadBundle(admin, tableId, { results: false });
+    if (botWaiting(first.table)) return false;
     if (first.table.settings?.botWaitUntil) {
       await patchSetting(admin, tableId, "botWaitUntil", null, null);
     }
     const table = first.table;
-    if (table.status !== "playing") return;
+    if (table.status !== "playing") return false;
     const hand = first.hand;
-    if (!hand || hand.status !== "playing" || !first.secret) return;
+    if (!hand || hand.status !== "playing" || !first.secret) return false;
     const seats = first.seats;
     const settings = settingsOf(table);
     const played = replayLoaded(hand, first.secret, first.events, settings);
     const state = played.step.state;
-    if (state.status !== "playing") return;
-    if (held(table) || undoOf(table)) return;
-    if (rulesV13(table) && automaticLastCard(state, state.turn, settings)) return;
-    if (passesAutomatically(table, seats) && serverAutomatic(state, settings)?.kind === "pass") return;
+    if (state.status !== "playing") return false;
+    if (held(table) || undoOf(table)) return false;
+    if (rulesV13(table) && automaticLastCard(state, state.turn, settings)) return false;
+    if (passesAutomatically(table, seats) && serverAutomatic(state, settings)?.kind === "pass") return false;
     const seat = seats.find((item) => item.seat_index === state.turn);
-    if (!seat?.is_bot) return;
-    if (rulesV14(table) && stuckLeaderAction(state, settings, true)?.kind === "pass") return;
+    if (!seat?.is_bot) return false;
+    if (rulesV14(table) && stuckLeaderAction(state, settings, true)?.kind === "pass") return false;
 
     const difficulty = String(seat.bot_difficulty ?? "normal");
     const level: Difficulty = difficulty === "easy" || difficulty === "hard" ? difficulty : "normal";
@@ -1577,7 +1624,7 @@ async function runBots(admin: SupabaseClient, tableId: string, seeded?: Bundle):
       locked: state.locked,
     });
     try {
-      const swept = await act(
+      await act(
         admin,
         tableId,
         seat.user_id,
@@ -1591,12 +1638,13 @@ async function runBots(admin: SupabaseClient, tableId: string, seeded?: Bundle):
         undefined,
         first,
       );
-      if (swept) return;
     } catch (error) {
       console.error(error);
     }
+    return true;
   } catch (error) {
     console.error(error);
+    return false;
   }
 }
 
@@ -1684,7 +1732,7 @@ export async function handleTable(req: Request): Promise<Response> {
       display_name: name,
     });
     if (error) throw new HttpError(500, error.message);
-    return json({ view: await buildView(admin, table.id, userId) });
+    return json({ view: await buildView(admin, table.id, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "join") {
@@ -1719,7 +1767,7 @@ export async function handleTable(req: Request): Promise<Response> {
         const missing = /could not find the function/i.test(message) || /schema cache/i.test(message);
         if (!missing) throw new HttpError(500, message);
       } else if (rpcJson(reclaimed).reclaimed === true) {
-        return json({ view: await buildView(admin, table.id, userId) });
+        return json({ view: await buildView(admin, table.id, userId, { cursor: parseHistoryCursor(body) }) });
       }
       if (table.status !== "lobby") throw new HttpError(400, "That table has already started");
       if (seats.length >= 4) throw new HttpError(400, "That table is full");
@@ -1733,7 +1781,7 @@ export async function handleTable(req: Request): Promise<Response> {
       });
       if (insertError) throw new HttpError(400, "That seat was just taken. Try again.");
     }
-    return json({ view: await buildView(admin, table.id, userId) });
+    return json({ view: await buildView(admin, table.id, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "watch") {
@@ -1747,7 +1795,7 @@ export async function handleTable(req: Request): Promise<Response> {
     if (seats.some((seat) => seat.user_id === userId)) {
       const { error: dropError } = await admin.from("table_viewers").delete().eq("table_id", table.id).eq("user_id", userId);
       if (dropError) throw new HttpError(500, dropError.message);
-      return json({ view: await buildView(admin, table.id, userId) });
+      return json({ view: await buildView(admin, table.id, userId, { cursor: parseHistoryCursor(body) }) });
     }
     if (seats.length < 4 && table.status === "lobby") throw new HttpError(400, "There is still a seat at that table");
     const existing = await viewerRow(admin, table.id, userId);
@@ -1766,14 +1814,14 @@ export async function handleTable(req: Request): Promise<Response> {
       last_seen: new Date().toISOString(),
     }, { onConflict: "table_id,user_id" });
     if (watchError) throw new HttpError(500, watchError.message);
-    return json({ view: await buildView(admin, table.id, userId) });
+    return json({ view: await buildView(admin, table.id, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   const tableId = String(body.tableId ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(tableId)) throw new HttpError(400, "Missing table");
 
   if (action === "state" || action === "heartbeat") {
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "exit") {
@@ -1803,7 +1851,7 @@ export async function handleTable(req: Request): Promise<Response> {
       body: text.text,
     });
     if (error) throw new HttpError(500, error.message);
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "undo" || action === "undo_vote") {
@@ -1813,7 +1861,7 @@ export async function handleTable(req: Request): Promise<Response> {
     if (!rulesV13(table)) throw new HttpError(400, "Undo is not used at this table");
     if (action === "undo") await openUndo(admin, table, seats, me);
     else await castUndoVote(admin, table, me, body.approve === true);
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "settings") {
@@ -1832,7 +1880,7 @@ export async function handleTable(req: Request): Promise<Response> {
       })
       .eq("id", tableId);
     if (error) throw new HttpError(500, error.message);
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "shuffle" || action === "order") {
@@ -1843,7 +1891,7 @@ export async function handleTable(req: Request): Promise<Response> {
     if (table.status !== "lobby") throw new HttpError(400, "Seats can change only before a hand is dealt");
     const order = action === "shuffle" ? shuffledSeatOrder(seats) : seatOrder(seats, body.order);
     await writeSeatOrder(admin, table.id, order);
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "add_bot") {
@@ -1868,7 +1916,7 @@ export async function handleTable(req: Request): Promise<Response> {
       bot_difficulty: difficulty,
     });
     if (error) throw new HttpError(400, "That seat was just taken. Try again.");
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "remove_bot") {
@@ -1885,7 +1933,7 @@ export async function handleTable(req: Request): Promise<Response> {
     if (seat.stand_in) throw new HttpError(400, "That computer is holding a seat for someone who left");
     const { error } = await admin.from("seats").delete().eq("table_id", tableId).eq("seat_index", seatIndex).eq("is_bot", true);
     if (error) throw new HttpError(500, error.message);
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "rename") {
@@ -1910,7 +1958,7 @@ export async function handleTable(req: Request): Promise<Response> {
       const { error: hostError } = await admin.from("game_tables").update({ host_name: name }).eq("id", tableId);
       if (hostError) throw new HttpError(500, hostError.message);
     }
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   if (action === "new_round") {
@@ -1928,7 +1976,7 @@ export async function handleTable(req: Request): Promise<Response> {
     if (error) throw new HttpError(500, error.message);
     if (!data || data.length === 0) throw new HttpError(409, "The table changed. Try that again.");
     await clearChat(admin, tableId);
-    return json({ view: await buildView(admin, tableId, userId) });
+    return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
   }
 
   throw new HttpError(400, "Unknown action");
@@ -1942,7 +1990,7 @@ export async function handleDeal(req: Request): Promise<Response> {
   const table = await loadTable(admin, tableId);
   const seats = await loadSeats(admin, tableId);
   await dealHand(admin, table, seats, userId);
-  return json({ view: await buildView(admin, tableId, userId) });
+  return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
 }
 
 export async function handlePlay(req: Request): Promise<Response> {
@@ -1952,7 +2000,7 @@ export async function handlePlay(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "play", cards);
-  return json({ view: await buildView(admin, tableId, userId) });
+  return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
 }
 
 export async function handlePass(req: Request): Promise<Response> {
@@ -1961,7 +2009,13 @@ export async function handlePass(req: Request): Promise<Response> {
   const admin = adminClient();
   const tableId = String(body.tableId ?? "");
   await act(admin, tableId, userId, "pass", []);
-  return json({ view: await buildView(admin, tableId, userId) });
+  return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
+}
+
+function webhookPending(hand: Row | null): boolean {
+  if (!hand) return false;
+  const status = String(hand.webhook_status ?? "");
+  return status === "pending" || status === "failed" || status === "sending";
 }
 
 export async function handleTick(req: Request): Promise<Response> {
@@ -1969,14 +2023,14 @@ export async function handleTick(req: Request): Promise<Response> {
   const body = await readBody(req);
   const tableId = String(body.tableId ?? "");
   const admin = adminClient();
-  const bundle0 = await loadBundle(admin, tableId);
-  let bundle = bundle0;
+  const cursor = parseHistoryCursor(body);
+  let bundle = await loadBundle(admin, tableId, { cursor });
   let table = bundle.table;
   const dirty = Boolean(undoOf(table)) || Boolean(table.settings?.hold && !held(table));
   if (table.settings?.hold && !held(table)) await clearStaleHold(admin, table);
   if (undoOf(table)) await settleUndo(admin, table);
   if (dirty) {
-    bundle = await loadBundle(admin, tableId);
+    bundle = await loadBundle(admin, tableId, { cursor });
     table = bundle.table;
   }
   const seats = bundle.seats;
@@ -1985,19 +2039,21 @@ export async function handleTick(req: Request): Promise<Response> {
   const played = hand && hand.status === "playing" && bundle.secret
     ? replayLoaded(hand, bundle.secret, bundle.events, settings)
     : null;
+  const finish = async (reload: boolean) => {
+    const viewBundle = reload ? await loadBundle(admin, tableId, { cursor }) : bundle;
+    return json({ view: await buildView(admin, tableId, userId, { seeded: viewBundle }) });
+  };
   if (undoOf(table)) {
-    if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
-      await sendWebhook(admin, hand.id);
-    }
-    return json({ view: await buildView(admin, tableId, userId) });
+    const pending = webhookPending(hand);
+    if (pending && hand) await sendWebhook(admin, hand.id);
+    return finish(pending);
   }
   if (held(table)) {
     const at = Date.parse(String(table.settings?.hold?.at ?? ""));
     if (!Number.isFinite(at) || Date.now() - at < AUTO_PASS_WAIT_MS) {
-      if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
-        await sendWebhook(admin, hand.id);
-      }
-      return json({ view: await buildView(admin, tableId, userId) });
+      const pending = webhookPending(hand);
+      if (pending && hand) await sendWebhook(admin, hand.id);
+      return finish(pending);
     }
   }
   const state = played && played.step.state.status === "playing" ? played.step.state : null;
@@ -2018,11 +2074,13 @@ export async function handleTick(req: Request): Promise<Response> {
       moved = true;
     }
   }
-  if (hand?.status === "playing") await runBots(admin, tableId, moved ? undefined : bundle);
-  if (hand && (hand.webhook_status === "pending" || hand.webhook_status === "failed" || hand.webhook_status === "sending")) {
-    await sendWebhook(admin, hand.id);
+  if (hand?.status === "playing") {
+    const botMoved = await runBots(admin, tableId, moved ? undefined : bundle);
+    moved = moved || botMoved;
   }
-  return json({ view: await buildView(admin, tableId, userId) });
+  const pending = webhookPending(hand);
+  if (pending && hand) await sendWebhook(admin, hand.id);
+  return finish(moved || pending);
 }
 
 export async function handlePing(): Promise<Response> {
