@@ -109,4 +109,58 @@ void main() {
     expect(view.recent.last.cards, ["7S", "7H"]);
     expect(view.recent.last.label, "Pair of 7s");
   });
+
+  test("a full score sheet replaces history, and a delta keeps hands already on the phone", () {
+    final first = _sheet([
+      _hand(1, status: "sent"),
+      _hand(2, status: "pending"),
+    ]);
+    final replaced = mergeTableHistory(first, _sheet([_hand(1, status: "sent")]));
+    expect(replaced.history.map((hand) => hand.hand), [1]);
+    expect(replaced.historyDelta, isFalse);
+
+    final delta = _sheet([
+      _hand(2, status: "sent"),
+      _hand(3, status: "pending"),
+    ], delta: true);
+    final merged = mergeTableHistory(first, delta);
+    expect(merged.historyDelta, isFalse);
+    expect(merged.history.map((hand) => hand.hand), [1, 2, 3]);
+    expect(merged.history[1].scoreStatus, "sent");
+    expect(merged.history[0].deckReveal, "3D");
+  });
+
+  test("a new round does not keep the previous round's hands on the sheet", () {
+    final previous = _sheet([_hand(4)], round: 1);
+    final nextRound = _sheet([_hand(1, round: 2)], round: 2, delta: true);
+    final merged = mergeTableHistory(previous, nextRound);
+    expect(merged.round, 2);
+    expect(merged.history.single.round, 2);
+    expect(merged.history.single.hand, 1);
+  });
+}
+
+Map<String, dynamic> _hand(int hand, {int round = 1, String status = "sent"}) {
+  return {
+    "round": round,
+    "hand": hand,
+    "date": "2026-11-03",
+    "players": ["Justin", "Mary", "Pauline", "Damien"],
+    "cardsLeft": [0, 1, 2, 3],
+    "handPoints": [0, 1, 2, 3],
+    "runningTotals": [hand, 1, 2, 3],
+    "bonuses": [],
+    "roundOver": false,
+    "scoreStatus": status,
+    "commitment": "abc",
+    "deckReveal": "3D",
+  };
+}
+
+TableSnapshot _sheet(List<Map<String, dynamic>> hands, {int round = 1, bool delta = false}) {
+  final raw = _view();
+  raw["round"] = round;
+  raw["history"] = hands;
+  raw["historyDelta"] = delta;
+  return TableSnapshot.fromJson(raw);
 }

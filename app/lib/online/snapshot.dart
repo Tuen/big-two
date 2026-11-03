@@ -148,6 +148,8 @@ class TableSnapshot {
   final String message;
   final HandResultView? result;
   final List<HistoryHand> history;
+  /// True when [history] is only the hands that changed since the last view.
+  final bool historyDelta;
   final bool roundOver;
   final bool canDeal;
   final bool canNewRound;
@@ -185,6 +187,7 @@ class TableSnapshot {
     required this.message,
     required this.result,
     required this.history,
+    this.historyDelta = false,
     required this.roundOver,
     required this.canDeal,
     required this.canNewRound,
@@ -281,6 +284,7 @@ class TableSnapshot {
             deckReveal: _map(row)["deckReveal"]?.toString() ?? "",
           ),
       ],
+      historyDelta: json["historyDelta"] == true,
       roundOver: json["roundOver"] == true,
       canDeal: json["canDeal"] == true,
       canNewRound: json["canNewRound"] == true,
@@ -314,6 +318,64 @@ class TableSnapshot {
       ],
     );
   }
+
+  TableSnapshot withHistory(List<HistoryHand> history, {required bool historyDelta}) {
+    return TableSnapshot(
+      tableId: tableId,
+      code: code,
+      status: status,
+      hostId: hostId,
+      you: you,
+      season: season,
+      round: round,
+      hand: hand,
+      settings: settings,
+      seats: seats,
+      yourCards: yourCards,
+      counts: counts,
+      turn: turn,
+      firstLead: firstLead,
+      trick: trick,
+      locked: locked,
+      running: running,
+      commitment: commitment,
+      deckReveal: deckReveal,
+      message: message,
+      result: result,
+      history: history,
+      historyDelta: historyDelta,
+      roundOver: roundOver,
+      canDeal: canDeal,
+      canNewRound: canNewRound,
+      canEditSettings: canEditSettings,
+      turnStartedAt: turnStartedAt,
+      recent: recent,
+      canUndo: canUndo,
+      undo: undo,
+      holding: holding,
+      watching: watching,
+      viewerCount: viewerCount,
+      watchers: watchers,
+      chat: chat,
+    );
+  }
+}
+
+/// Keep hands the phone already has, and apply a later delta on top.
+/// A full view replaces the list. The stored view is never itself a delta.
+TableSnapshot mergeTableHistory(TableSnapshot? previous, TableSnapshot next) {
+  if (!next.historyDelta || previous == null || previous.tableId != next.tableId) {
+    return next.historyDelta ? next.withHistory(next.history, historyDelta: false) : next;
+  }
+  final merged = <int, HistoryHand>{};
+  for (final hand in previous.history) {
+    if (hand.round == next.round) merged[hand.hand] = hand;
+  }
+  for (final hand in next.history) {
+    if (hand.round == next.round) merged[hand.hand] = hand;
+  }
+  final history = merged.values.toList()..sort((a, b) => a.hand.compareTo(b.hand));
+  return next.withHistory(history, historyDelta: false);
 }
 
 int _int(dynamic value) => value is int ? value : (value as num).toInt();

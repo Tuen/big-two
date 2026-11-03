@@ -3,6 +3,7 @@ import "dart:async";
 import "package:big_two/online/action_reel.dart";
 import "package:big_two/online/audience.dart";
 import "package:big_two/online/game_api.dart";
+import "package:big_two/online/presence.dart";
 import "package:big_two/online/selection.dart";
 import "package:big_two/online/snapshot.dart";
 import "package:big_two/rules/cards.dart";
@@ -51,7 +52,7 @@ class OnlinePage extends StatefulWidget {
   State<OnlinePage> createState() => _OnlinePageState();
 }
 
-class _OnlinePageState extends State<OnlinePage> {
+class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
   TableSnapshot? _view;
   String? _error;
   bool _busy = false;
@@ -64,8 +65,9 @@ class _OnlinePageState extends State<OnlinePage> {
   Timer? _sweepTimer;
   Timer? _botTimer;
   Timer? _noPlay;
-  Timer? _chatPoll;
   Timer? _pauseTimer;
+  Timer? _refreshSoon;
+  Timer? _turnDeadline;
   String? _noPlayCue;
   int? _chatSeen;
   bool _chatOpen = false;
@@ -86,14 +88,22 @@ class _OnlinePageState extends State<OnlinePage> {
   String? _dealCue;
   String? _turnCue;
   String? _endCue;
+  String? _turnDeadlineCue;
+  bool _visible = true;
+  bool _refreshQueued = false;
+  bool _historyComplete = false;
+  String? _historyTable;
+  int? _historyRound;
+  int? _historyHand;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _sound = widget.sound;
     TableSounds.instance.enabled = _sound;
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && _view?.settings.turnTimerSeconds != 0) setState(() {});
+      if (mounted && _visible && _view?.settings.turnTimerSeconds != 0) setState(() {});
     });
     _open();
   }
@@ -101,6 +111,7 @@ class _OnlinePageState extends State<OnlinePage> {
   @override
   void dispose() {
     // Closing the page does not exit the seat. Only the Exit button does.
+    WidgetsBinding.instance.removeObserver(this);
     _poll?.cancel();
     _clock?.cancel();
     _pace?.cancel();
@@ -109,7 +120,8 @@ class _OnlinePageState extends State<OnlinePage> {
     _botTimer?.cancel();
     _noPlay?.cancel();
     _pauseTimer?.cancel();
-    _chatPoll?.cancel();
+    _refreshSoon?.cancel();
+    _turnDeadline?.cancel();
     _chatTick.dispose();
     _channel?.unsubscribe();
     super.dispose();
@@ -154,9 +166,27 @@ class _OnlinePageState extends State<OnlinePage> {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final visible = appIsVisible(state);
+    if (visible == _visible) return;
+    _visible = visible;
+    if (!visible) {
+      _poll?.cancel();
+      _poll = null;
+      _refreshSoon?.cancel();
+      _refreshSoon = null;
+      _turnDeadline?.cancel();
+      _turnDeadline = null;
+      return;
+    }
+    _startPoll();
+    _refresh();
+  }
+
   void _listen(String tableId) {
-    _poll?.cancel();
-    _poll = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
+    _startPoll();
+    _channel?.unsubscribe();
     _channel = widget.api.client
         .channel("table-$tableId")
         .onPostgresChanges(
@@ -164,30 +194,91 @@ class _OnlinePageState extends State<OnlinePage> {
           schema: "public",
           table: "hands",
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: "table_id", value: tableId),
-          callback: (_) => _refresh(),
+          callback: (_) => _scheduleRefresh(),
         )
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: "public",
           table: "seats",
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: "table_id", value: tableId),
-          callback: (_) => _refresh(),
+          callback: (payload) {
+            final presenceOnly = payload.eventType == PostgresChangeEvent.update &&
+                recordsArePresenceOnly(payload.oldRecord, payload.newRecord);
+            if (presenceOnly) return;
+            _scheduleRefresh();
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: "public",
+          table: "game_tables",
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: "id", value: tableId),
+          callback: (_) => _scheduleRefresh(),
         )
         .subscribe();
   }
 
+  void _startPoll() {
+    _poll?.cancel();
+    if (!_visible || _view == null) return;
+    _poll = Timer.periodic(Duration(seconds: fallbackPollSeconds), (_) => _refresh());
+  }
+
+  /// Realtime can report the hand, the seats, and the table for one move.
+  /// One follow-up tick is enough.
+  void _scheduleRefresh() {
+    if (!_visible || _view == null) return;
+    _refreshSoon?.cancel();
+    _refreshSoon = Timer(const Duration(milliseconds: 200), () {
+      if (mounted) _refresh();
+    });
+  }
+
   Future<void> _refresh() async {
+    if (!_visible) return;
     final current = _view;
-    if (current == null || _busy) return;
+    if (current == null) return;
+    if (_busy) {
+      _refreshQueued = true;
+      return;
+    }
     _busy = true;
     try {
-      final next = await widget.api.call("tick", {"tableId": current.tableId});
+      final next = await widget.api.call("tick", _withHistoryCursor({"tableId": current.tableId}));
       if (mounted) setState(() => _accept(next));
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
       _busy = false;
+      if (_refreshQueued) {
+        _refreshQueued = false;
+        if (_visible && mounted) unawaited(_refresh());
+      }
     }
+  }
+
+  Map<String, dynamic> _withHistoryCursor(Map<String, dynamic> body) {
+    if (!_historyComplete || _historyTable == null || _historyRound == null || _historyHand == null) return body;
+    final tableId = body["tableId"]?.toString();
+    if (tableId != null && tableId != _historyTable) return body;
+    return {
+      ...body,
+      "afterRound": _historyRound,
+      "afterHand": _historyHand,
+    };
+  }
+
+  void _noteHistory(TableSnapshot next, {required bool receivedDelta}) {
+    if (!receivedDelta) _historyComplete = true;
+    if (!_historyComplete) return;
+    if (_historyTable != null && _historyTable != next.tableId && receivedDelta) return;
+    _historyTable = next.tableId;
+    _historyRound = next.round;
+    var hand = 0;
+    for (final row in next.history) {
+      if (row.round == next.round && row.hand > hand) hand = row.hand;
+    }
+    _historyHand = hand;
   }
 
   Future<void> _send(String function, Map<String, dynamic> body) async {
@@ -197,7 +288,7 @@ class _OnlinePageState extends State<OnlinePage> {
     });
     TableSounds.instance.unlock();
     try {
-      final next = await widget.api.call(function, body);
+      final next = await widget.api.call(function, _withHistoryCursor(body));
       if (_sound) HapticFeedback.mediumImpact();
       if (mounted) setState(() => _accept(next, played: function == "play"));
     } catch (error) {
@@ -205,8 +296,11 @@ class _OnlinePageState extends State<OnlinePage> {
     }
   }
 
-  void _accept(TableSnapshot next, {bool played = false}) {
+  void _accept(TableSnapshot incoming, {bool played = false}) {
+    final receivedDelta = incoming.historyDelta;
+    final next = mergeTableHistory(_view, incoming);
     final previous = _view;
+    _noteHistory(next, receivedDelta: receivedDelta);
     final newHand = previous == null || previous.round != next.round || previous.hand != next.hand;
     final cardsChanged = previous == null || previous.yourCards.join(",") != next.yourCards.join(",");
     _view = next;
@@ -259,8 +353,6 @@ class _OnlinePageState extends State<OnlinePage> {
   Future<void> _openChat(TableSnapshot view) async {
     if (view.chat.isNotEmpty) setState(() => _chatSeen = view.chat.last.id);
     setState(() => _chatOpen = true);
-    _chatPoll?.cancel();
-    _chatPoll = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -278,8 +370,6 @@ class _OnlinePageState extends State<OnlinePage> {
         );
       },
     );
-    _chatPoll?.cancel();
-    _chatPoll = null;
     if (mounted) {
       final current = _view;
       setState(() {
@@ -287,6 +377,35 @@ class _OnlinePageState extends State<OnlinePage> {
         if (current != null && current.chat.isNotEmpty) _chatSeen = current.chat.last.id;
       });
     }
+  }
+
+  void _armTurnDeadline(TableSnapshot next) {
+    if (!_visible) return;
+    final plan = refreshWaitForTurnTimer(
+      timerSeconds: next.settings.turnTimerSeconds,
+      turnStartedAt: next.turnStartedAt,
+      now: DateTime.now(),
+      playing: next.status == "playing",
+      blocked: next.undo != null || next.holding,
+    );
+    final token = "${next.round}:${next.hand}:${next.turn}:${next.turnStartedAt}";
+    if (plan == null) {
+      _turnDeadline?.cancel();
+      _turnDeadline = null;
+      _turnDeadlineCue = null;
+      return;
+    }
+    if (plan.expired && _turnDeadlineCue == token) return;
+    _turnDeadline?.cancel();
+    _turnDeadlineCue = token;
+    _turnDeadline = Timer(plan.wait, () {
+      _turnDeadlineCue = null;
+      if (!mounted || !_visible) return;
+      final current = _view;
+      if (current == null) return;
+      final same = "${current.round}:${current.hand}:${current.turn}:${current.turnStartedAt}" == token;
+      if (same) _refresh();
+    });
   }
 
   void _armPause(TableSnapshot next) {
@@ -299,6 +418,7 @@ class _OnlinePageState extends State<OnlinePage> {
 
   void _followUp(TableSnapshot next) {
     _armPause(next);
+    _armTurnDeadline(next);
     if (next.watching) {
       _armBots(next);
       _armTwoSpades(next);
