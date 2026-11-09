@@ -1,11 +1,9 @@
 name: Deploy edge functions
 
+# Functions only. This branch does not re-apply old SQL.
+# The website is published by "Publish the web app" and is not part of this job.
 on:
   workflow_dispatch:
-  push:
-    branches: [v1.1-dev]
-    paths:
-      - .github/workflows/deploy-functions.yml
 
 permissions:
   contents: read
@@ -14,59 +12,202 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out v1.1-dev
+      - name: Check out this commit
         uses: actions/checkout@v4
+
+      - name: Confirm the function source matches the merged game
+        run: |
+          git merge-base --is-ancestor 25f9d034cba559958d758e9a867527cb887b0c2a HEAD
+          git diff --exit-code 25f9d034cba559958d758e9a867527cb887b0c2a -- supabase
+          grep -q "gameWebhookPayload" supabase/functions/_shared/rules/score.ts
+          grep -q "shouldPostGameScores" supabase/functions/_shared/server.ts
+          echo "Function source matches 25f9d03"
 
       - name: Set up the Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: 2.122.0
 
-      - name: Add viewer and chat tables
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          ALT_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
-        run: |
-          if [ -z "$SUPABASE_ACCESS_TOKEN" ] && [ -n "$ALT_TOKEN" ]; then
-            SUPABASE_ACCESS_TOKEN="$ALT_TOKEN"
-          fi
-          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
-            echo "This repository has no SUPABASE_ACCESS_TOKEN secret. The database was not updated."
-            exit 1
-          fi
-          python3 - <<'PY'
-          import json, os, urllib.request
-          sql = open("supabase/migrations/005_viewers_and_chat.sql", encoding="utf-8").read()
-          sql += "\n" + open("supabase/migrations/006_pause_and_move_log.sql", encoding="utf-8").read()
-          sql += "\n" + open("supabase/migrations/007_fast_table_read.sql", encoding="utf-8").read()
-          request = urllib.request.Request(
-              "https://api.supabase.com/v1/projects/ascorkeijzrpmfykpcrb/database/query",
-              data=json.dumps({"query": sql}).encode(),
-              headers={
-                  "Authorization": "Bearer " + os.environ["SUPABASE_ACCESS_TOKEN"],
-                  "Content-Type": "application/json",
-              },
-              method="POST",
-          )
-          with urllib.request.urlopen(request) as response:
-              print(response.status)
-              print(response.read().decode()[:400])
-          PY
-
       - name: Deploy table deal play pass tick ping
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           ALT_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
         run: |
-          if [ -z "$SUPABASE_ACCESS_TOKEN" ] && [ -n "$ALT_TOKEN" ]; then
+          set -euo pipefail
+          if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ] && [ -n "${ALT_TOKEN:-}" ]; then
             SUPABASE_ACCESS_TOKEN="$ALT_TOKEN"
           fi
-          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+          if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ]; then
             echo "This repository has no SUPABASE_ACCESS_TOKEN secret. Edge functions were not deployed."
             exit 1
           fi
           export SUPABASE_ACCESS_TOKEN
-          supabase functions deploy table deal play pass tick ping \
+          unset ALT_TOKEN
+
+          python3 - <<'PY'
+          import json, os, urllib.request
+          token = os.environ["SUPABASE_ACCESS_TOKEN"]
+          ref = "ascorkeijzrpmfykpcrb"
+          request = urllib.request.Request(
+              f"https://api.supabase.com/v1/projects/{ref}/functions",
+              headers={"Authorization": "Bearer " + token},
+          )
+          with urllib.request.urlopen(request) as response:
+              rows = json.load(response)
+          wanted = ["table", "deal", "play", "pass", "tick", "ping"]
+          found = {row.get("slug"): row for row in rows}
+          print("Live function versions before deploy:")
+          for slug in wanted:
+              row = found.get(slug)
+              if not row:
+                  raise SystemExit(f"Missing live function: {slug}")
+              print(f"  {slug} version {row.get('version')} status {row.get('status')} updated {row.get('updated_at')}")
+          PY
+
+          rollback="$RUNNER_TEMP/rollback"
+          mkdir -p "$rollback/supabase"
+          cp supabase/config.toml "$rollback/supabase/config.toml"
+          (
+            cd "$rollback"
+            for slug in table deal play pass tick ping; do
+              supabase functions download "$slug" --project-ref ascorkeijzrpmfykpcrb --use-api
+            done
+          )
+          test -s "$rollback/supabase/functions/play/index.ts"
+          if grep -q "shouldPostGameScores" "$rollback/supabase/functions/play/index.ts" \
+            "$rollback/supabase/functions/play/"*.ts 2>/dev/null; then
+            echo "The saved rollback copy already contains the new score code. Stopping before deploy."
+            exit 1
+          fi
+          echo "Saved the six live functions for rollback."
+
+          rollback_now() {
+            echo "Deploy did not stay live. Putting the previous six functions back."
+            (
+              cd "$rollback"
+              supabase functions deploy table deal play pass tick ping \
+                --project-ref ascorkeijzrpmfykpcrb \
+                --use-api \
+                --yes
+            )
+          }
+
+          if ! supabase functions deploy table deal play pass tick ping \
             --project-ref ascorkeijzrpmfykpcrb \
             --use-api \
-            --yes
+            --yes; then
+            rollback_now
+            exit 1
+          fi
+
+          check="$RUNNER_TEMP/check"
+          mkdir -p "$check/supabase"
+          cp supabase/config.toml "$check/supabase/config.toml"
+          (
+            cd "$check"
+            supabase functions download play --project-ref ascorkeijzrpmfykpcrb --use-api
+          )
+          if ! grep -R -q "shouldPostGameScores" "$check/supabase/functions/play"; then
+            echo "The live play function does not contain the merged score code."
+            rollback_now
+            exit 1
+          fi
+          echo "Live play function contains the merged score code."
+
+          if ! python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+          token = os.environ["SUPABASE_ACCESS_TOKEN"]
+          ref = "ascorkeijzrpmfykpcrb"
+          base = "https://ascorkeijzrpmfykpcrb.supabase.co"
+          anon = json.load(open("app/public-client.json"))["SUPABASE_ANON_KEY"]
+
+          def request(url, method="GET", body=None, bearer=None, ok=(200, 201)):
+              data = None if body is None else json.dumps(body).encode()
+              headers = {"apikey": anon, "Content-Type": "application/json"}
+              if bearer:
+                  headers["Authorization"] = "Bearer " + bearer
+              else:
+                  headers["Authorization"] = "Bearer " + anon
+              req = urllib.request.Request(url, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req) as response:
+                      raw = response.read().decode()
+                      return response.status, json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as error:
+                  detail = error.read().decode(errors="replace")[:300]
+                  raise SystemExit(f"HTTP {error.code} from {method} {url.split('?')[0]}: {detail}")
+
+          status, session = request(base + "/auth/v1/signup", "POST", {})
+          access = session.get("access_token")
+          if not access:
+              raise SystemExit("Anonymous sign-in did not return a session")
+
+          def call(function, payload):
+              code, data = request(base + "/functions/v1/" + function, "POST", payload, access)
+              if isinstance(data, dict) and isinstance(data.get("error"), str):
+                  raise SystemExit(data["error"])
+              view = data.get("view") if isinstance(data, dict) else None
+              if not isinstance(view, dict):
+                  raise SystemExit(f"{function} did not return a table view")
+              return view
+
+          view = call("table", {"action": "create", "name": "Test"})
+          table_id = view["tableId"]
+          code = view["code"]
+          print(f"Created test table {code}")
+          for seat in (1, 2, 3):
+              view = call("table", {"action": "add_bot", "tableId": table_id, "seat": seat, "difficulty": "easy"})
+          names = [seat.get("name") for seat in view["seats"]]
+          if names[0] != "Test" or any(name is None for name in names):
+              raise SystemExit(f"Seats were not filled with Test and computers: {names}")
+          view = call("deal", {"tableId": table_id})
+          cards = view.get("yourCards") or []
+          if view.get("status") != "playing" or len(cards) != 13:
+              raise SystemExit(f"Deal did not start a hand: status {view.get('status')} cards {len(cards)}")
+          print(f"Dealt a hand at table {code}. Test has 13 cards.")
+          before = list(view.get("counts") or [])
+          moved = False
+          for _ in range(8):
+              view = call("tick", {"tableId": table_id})
+              if list(view.get("counts") or []) != before:
+                  moved = True
+                  break
+          cards = view.get("yourCards") or cards
+          if not moved and view.get("turn") == 0 and "3D" in (view.get("yourCards") or []):
+              view = call("play", {"tableId": table_id, "cards": ["3D"]})
+              moved = list(view.get("counts") or []) != before
+          if not moved:
+              raise SystemExit("The dealt hand did not accept a play")
+          print(f"A play landed. Status {view.get('status')} hand {view.get('hand')}.")
+          leave_code, left = request(
+              base + "/functions/v1/table",
+              "POST",
+              {"action": "exit", "tableId": table_id},
+              access,
+          )
+          if not (isinstance(left, dict) and left.get("left") is True):
+              raise SystemExit("Test could not leave the table")
+          print(f"Test left table {code}. No round was finished.")
+          PY
+          then
+            rollback_now
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json, os, urllib.request
+          token = os.environ["SUPABASE_ACCESS_TOKEN"]
+          ref = "ascorkeijzrpmfykpcrb"
+          request = urllib.request.Request(
+              f"https://api.supabase.com/v1/projects/{ref}/functions",
+              headers={"Authorization": "Bearer " + token},
+          )
+          with urllib.request.urlopen(request) as response:
+              rows = json.load(response)
+          wanted = ["table", "deal", "play", "pass", "tick", "ping"]
+          found = {row.get("slug"): row for row in rows}
+          print("Live function versions after deploy:")
+          for slug in wanted:
+              row = found[slug]
+              print(f"  {slug} version {row.get('version')} status {row.get('status')} updated {row.get('updated_at')}")
+          PY
