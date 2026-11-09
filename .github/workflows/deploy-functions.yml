@@ -16,13 +16,15 @@ jobs:
     steps:
       - name: Check out this commit
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Confirm the function source matches the merged game
         run: |
+          git merge-base --is-ancestor 25f9d034cba559958d758e9a867527cb887b0c2a HEAD
+          git diff --exit-code 25f9d034cba559958d758e9a867527cb887b0c2a -- supabase
           grep -q "gameWebhookPayload" supabase/functions/_shared/rules/score.ts
           grep -q "shouldPostGameScores" supabase/functions/_shared/server.ts
-          git fetch --depth=1 origin 25f9d034cba559958d758e9a867527cb887b0c2a
-          git diff --exit-code FETCH_HEAD -- supabase
           echo "Function source matches 25f9d03. Commit $(git rev-parse HEAD)"
 
       - name: Set up the Supabase CLI
@@ -76,8 +78,8 @@ jobs:
             done
           )
           test -s "$rollback/supabase/functions/play/index.ts"
-          if grep -q "shouldPostGameScores" "$rollback/supabase/functions/play/index.ts" \
-            "$rollback/supabase/functions/play/"*.ts 2>/dev/null; then
+          test -s "$rollback/supabase/functions/_shared/server.ts"
+          if grep -q "shouldPostGameScores" "$rollback/supabase/functions/_shared/server.ts"; then
             echo "The saved rollback copy already contains the new score code. Stopping before deploy."
             exit 1
           fi
@@ -109,15 +111,17 @@ jobs:
             cd "$check"
             supabase functions download play --project-ref ascorkeijzrpmfykpcrb --use-api
           )
-          if ! grep -R -q "shouldPostGameScores" "$check/supabase/functions/play"; then
-            echo "The live play function does not contain the merged score code."
+          shared="$check/supabase/functions/_shared"
+          if ! grep -q "shouldPostGameScores" "$shared/server.ts" \
+            || ! grep -q "gameWebhookPayload" "$shared/rules/score.ts"; then
+            echo "The live shared score code was not found next to the function folders."
             rollback_now
             exit 1
           fi
-          echo "Live play function contains the merged score code."
+          echo "Live shared server file contains the merged score code."
 
           if ! python3 - <<'PY'
-          import json, os, urllib.error, urllib.request
+          import json, os, time, urllib.error, urllib.request
           token = os.environ["SUPABASE_ACCESS_TOKEN"]
           ref = "ascorkeijzrpmfykpcrb"
           base = "https://ascorkeijzrpmfykpcrb.supabase.co"
@@ -140,7 +144,8 @@ jobs:
                   raise SystemExit(f"HTTP {error.code} from {method} {url.split('?')[0]}: {detail}")
 
           status, session = request(base + "/auth/v1/signup", "POST", {})
-          access = session.get("access_token")
+          nested = session.get("session") if isinstance(session.get("session"), dict) else {}
+          access = session.get("access_token") or nested.get("access_token")
           if not access:
               raise SystemExit("Anonymous sign-in did not return a session")
 
@@ -169,15 +174,20 @@ jobs:
           print(f"Dealt a hand at table {code}. Test has 13 cards.")
           before = list(view.get("counts") or [])
           moved = False
-          for _ in range(8):
+          if view.get("turn") == 0 and "3D" in cards:
+              view = call("play", {"tableId": table_id, "cards": ["3D"]})
+              moved = list(view.get("counts") or []) != before
+          for _ in range(6):
+              if moved:
+                  break
+              time.sleep(1.5)
               view = call("tick", {"tableId": table_id})
               if list(view.get("counts") or []) != before:
                   moved = True
                   break
-          cards = view.get("yourCards") or cards
-          if not moved and view.get("turn") == 0 and "3D" in (view.get("yourCards") or []):
-              view = call("play", {"tableId": table_id, "cards": ["3D"]})
-              moved = list(view.get("counts") or []) != before
+              if view.get("turn") == 0 and "3D" in (view.get("yourCards") or []):
+                  view = call("play", {"tableId": table_id, "cards": ["3D"]})
+                  moved = list(view.get("counts") or []) != before
           if not moved:
               raise SystemExit("The dealt hand did not accept a play")
           print(f"A play landed. Status {view.get('status')} hand {view.get('hand')}.")
