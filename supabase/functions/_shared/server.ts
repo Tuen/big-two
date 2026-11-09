@@ -23,7 +23,16 @@ import {
   DEFAULT_SETTINGS,
 } from "./rules/game.ts";
 import { commitDeck, cryptoUint32, shuffleDeck, shuffleInPlace } from "./rules/shuffle.ts";
-import { formatDate, webhookPayload, type WebhookPayload } from "./rules/score.ts";
+import {
+  formatDate,
+  gameIdFor,
+  gameWebhookPayload,
+  shouldPostGameScores,
+  storedHandPayload,
+  storedScoreDelivery,
+  webhookPayload,
+  type WebhookPayload,
+} from "./rules/score.ts";
 import { recentActions, type RecentEvent } from "./recent.ts";
 import {
   chatText,
@@ -911,10 +920,35 @@ async function saveProjection(
       bots,
       standIns,
     });
+    const queued = typeof hand.webhook_status === "string" && hand.webhook_status.length > 0;
+    const postGame = shouldPostGameScores(result.roundOver) && !queued;
     patch.deck_reveal = deckText;
     patch.round_over = result.roundOver;
-    patch.webhook_status = "pending";
-    patch.webhook_body = body;
+    if (postGame) {
+      const { data: earlier, error: earlierError } = await admin
+        .from("hand_results")
+        .select("hand_id, round_number, hand_number, players, cards_left, hand_points, running_totals, bonuses, round_over, played_on, has_bots, bots, stand_ins")
+        .eq("table_id", table.id)
+        .eq("round_number", hand.round_number)
+        .order("hand_number");
+      if (earlierError) throw new HttpError(500, earlierError.message);
+      const hands = (earlier ?? [])
+        .filter((row) => String(row.hand_id) !== hand.id)
+        .map((row) => handPayloadFromResult(row as Row, table.code, Number(table.season)));
+      hands.push(body);
+      const gameBody = gameWebhookPayload({
+        gameId: gameIdFor(String(table.id), Number(table.season), Number(hand.round_number)),
+        tableCode: table.code,
+        season: Number(table.season),
+        round: Number(hand.round_number),
+        date,
+        players: names,
+        finalTotals: result.runningTotals,
+        hands,
+      });
+      patch.webhook_status = "pending";
+      patch.webhook_body = gameBody;
+    }
     const { error: resultError } = await admin.from("hand_results").upsert({
       hand_id: hand.id,
       table_id: table.id,
@@ -930,7 +964,7 @@ async function saveProjection(
       played_on: date,
       commitment: hand.commitment,
       deck_reveal: deckText,
-      webhook_status: "pending",
+      webhook_status: postGame ? "pending" : queued ? hand.webhook_status : null,
       has_bots: body.hasBots,
       bots: body.bots,
       stand_ins: body.standIns,
@@ -954,7 +988,31 @@ async function saveProjection(
     })),
   );
   if (holdingError) throw new HttpError(500, holdingError.message);
-  if (state.status === "complete") await sendWebhook(admin, hand.id);
+  if (state.status === "complete" && patch.webhook_status === "pending") await sendWebhook(admin, hand.id);
+}
+
+function numberList(value: unknown): number[] {
+  return Array.isArray(value) ? value.map((item) => Number(item)) : [];
+}
+
+function handPayloadFromResult(row: Row, tableCode: string, season: number): WebhookPayload {
+  return storedHandPayload({
+    handId: String(row.hand_id),
+    tableCode,
+    season,
+    round: Number(row.round_number),
+    hand: Number(row.hand_number),
+    date: String(row.played_on ?? ""),
+    players: Array.isArray(row.players) ? row.players.map((name: unknown) => String(name)) : [],
+    cardsLeft: numberList(row.cards_left),
+    handPoints: numberList(row.hand_points),
+    runningTotals: numberList(row.running_totals),
+    roundOver: Boolean(row.round_over),
+    bonuses: Array.isArray(row.bonuses) ? row.bonuses : [],
+    hasBots: Boolean(row.has_bots),
+    bots: Array.isArray(row.bots) ? row.bots.map((name: unknown) => String(name)) : [],
+    standIns: Array.isArray(row.stand_ins) ? row.stand_ins : undefined,
+  });
 }
 
 const WEBHOOK_BURST = 5;
@@ -972,6 +1030,15 @@ function webhookHeaders(): Record<string, string> {
   return headers;
 }
 
+async function clearWebhook(admin: SupabaseClient, handId: string) {
+  await admin.from("hands").update({
+    webhook_status: null,
+    webhook_body: null,
+    webhook_claimed_at: null,
+  }).eq("id", handId);
+  await admin.from("hand_results").update({ webhook_status: null }).eq("hand_id", handId);
+}
+
 async function markWebhook(admin: SupabaseClient, handId: string, status: string, attempts?: number) {
   const patch: Row = { webhook_status: status };
   if (attempts != null) patch.webhook_attempts = attempts;
@@ -984,11 +1051,15 @@ async function sendWebhook(admin: SupabaseClient, handId: string): Promise<void>
   const url = Deno.env.get("SCORE_WEBHOOK_URL");
   const { data: hand, error } = await admin
     .from("hands")
-    .select("webhook_status, webhook_attempts, webhook_body, webhook_claimed_at")
+    .select("webhook_status, webhook_attempts, webhook_body, webhook_claimed_at, round_over")
     .eq("id", handId)
     .single();
   if (error || !hand) return;
   const status = String(hand.webhook_status ?? "");
+  if (storedScoreDelivery(hand.webhook_body, Boolean(hand.round_over)) === "drop") {
+    if (status === "pending" || status === "failed" || status === "sending") await clearWebhook(admin, handId);
+    return;
+  }
   if (!url) {
     if (status === "pending") await markWebhook(admin, handId, "skipped");
     return;
@@ -2013,10 +2084,23 @@ export async function handlePass(req: Request): Promise<Response> {
   return json({ view: await buildView(admin, tableId, userId, { cursor: parseHistoryCursor(body) }) });
 }
 
-function webhookPending(hand: Row | null): boolean {
-  if (!hand) return false;
-  const status = String(hand.webhook_status ?? "");
-  return status === "pending" || status === "failed" || status === "sending";
+/** Retry a finished game that has not been accepted yet. The stored body, including gameId, is sent unchanged. */
+async function retryOpenWebhooks(admin: SupabaseClient, tableId: string): Promise<boolean> {
+  const { data, error } = await admin
+    .from("hands")
+    .select("id, webhook_status, webhook_attempts")
+    .eq("table_id", tableId)
+    .in("webhook_status", ["pending", "failed", "sending"]);
+  if (error || !data?.length) return false;
+  let pending = false;
+  for (const row of data) {
+    const tries = Number(row.webhook_attempts ?? 0);
+    const status = String(row.webhook_status ?? "");
+    if (tries >= WEBHOOK_CAP && status !== "sending") continue;
+    pending = true;
+    await sendWebhook(admin, String(row.id));
+  }
+  return pending;
 }
 
 export async function handleTick(req: Request): Promise<Response> {
@@ -2045,15 +2129,13 @@ export async function handleTick(req: Request): Promise<Response> {
     return json({ view: await buildView(admin, tableId, userId, { seeded: viewBundle }) });
   };
   if (undoOf(table)) {
-    const pending = webhookPending(hand);
-    if (pending && hand) await sendWebhook(admin, hand.id);
+    const pending = await retryOpenWebhooks(admin, tableId);
     return finish(pending);
   }
   if (held(table)) {
     const at = Date.parse(String(table.settings?.hold?.at ?? ""));
     if (!Number.isFinite(at) || Date.now() - at < AUTO_PASS_WAIT_MS) {
-      const pending = webhookPending(hand);
-      if (pending && hand) await sendWebhook(admin, hand.id);
+      const pending = await retryOpenWebhooks(admin, tableId);
       return finish(pending);
     }
   }
@@ -2079,8 +2161,7 @@ export async function handleTick(req: Request): Promise<Response> {
     const botMoved = await runBots(admin, tableId, moved ? undefined : bundle);
     moved = moved || botMoved;
   }
-  const pending = webhookPending(hand);
-  if (pending && hand) await sendWebhook(admin, hand.id);
+  const pending = await retryOpenWebhooks(admin, tableId);
   return finish(moved || pending);
 }
 

@@ -19,7 +19,17 @@ import {
   startHand,
 } from "../../supabase/functions/_shared/rules/game.ts";
 import { DEFAULT_SETTINGS, type Settings } from "../../supabase/functions/_shared/rules/game.ts";
-import { cardPoints, roundWinnerName, scoreCounts, webhookPayload } from "../../supabase/functions/_shared/rules/score.ts";
+import {
+  cardPoints,
+  gameIdFor,
+  gameWebhookPayload,
+  roundWinnerName,
+  scoreCounts,
+  shouldPostGameScores,
+  storedHandPayload,
+  storedScoreDelivery,
+  webhookPayload,
+} from "../../supabase/functions/_shared/rules/score.ts";
 import { commitDeck, indexBelow, shuffleDeck, shuffleInPlace } from "../../supabase/functions/_shared/rules/shuffle.ts";
 
 const settings: Settings = { ...DEFAULT_SETTINGS };
@@ -503,6 +513,173 @@ test("the worked example: straight flush, then the hand scores and the round end
   ]);
   assert.equal(roundWinnerName(["Justin", "Mary"], [12, 12], false), null);
   assert.equal(roundWinnerName(["Justin", "Mary"], [12, 12], true), "Justin, Mary");
+  assert.equal(shouldPostGameScores(score.roundOver), true);
+});
+
+test("a game is posted once, after 50, and an abandoned game is not posted", () => {
+  const players = ["Justin", "Mary", "Pauline", "Damien"];
+  const under = scoreCounts([1, 1, 1, 1], [10, 20, 30, 48], []);
+  assert.equal(under.roundOver, false);
+  assert.equal(shouldPostGameScores(under.roundOver), false);
+  assert.equal(storedScoreDelivery(null, false), "drop");
+  assert.equal(storedScoreDelivery({ handId: "old", roundOver: false }, false), "drop");
+  assert.equal(storedScoreDelivery({ handId: "old", roundOver: true }, true), "send");
+  assert.equal(storedScoreDelivery({ type: "game", gameId: "table-1:24:11" }, true), "send");
+
+  const first = webhookPayload({
+    handId: "hand-2",
+    tableCode: "ABC123",
+    season: 24,
+    round: 11,
+    hand: 2,
+    date: "2026-10-23",
+    players,
+    cardsLeft: [0, 4, 3, 2],
+    handPoints: [0, 4, 3, 2],
+    runningTotals: [10, 24, 12, 6],
+    roundOver: false,
+    bonuses: [],
+    hasBots: true,
+    bots: ["Bot Ruby"],
+  });
+  const closing = storedHandPayload({
+    handId: "hand-1",
+    tableCode: "ABC123",
+    season: 24,
+    round: 11,
+    hand: 1,
+    date: "2026-10-22",
+    players,
+    cardsLeft: [0, 5, 2, 1],
+    handPoints: [0, 5, 2, 1],
+    runningTotals: [10, 20, 9, 4],
+    roundOver: false,
+    bonuses: [{ player: "Mary", combo: "four of a kind", pointsEach: 2 }],
+    standIns: [
+      { played: false, who: null },
+      { played: true, who: "Ralph" },
+      { played: false, who: null },
+      { played: false, who: null },
+    ],
+  });
+  const finished = webhookPayload({
+    handId: "hand-3",
+    tableCode: "ABC123",
+    season: 24,
+    round: 11,
+    hand: 3,
+    date: "2026-10-24",
+    players,
+    cardsLeft: [0, 11, 9, 4],
+    handPoints: [8, 30, 17, 4],
+    runningTotals: [28, 60, 55, 49],
+    roundOver: true,
+    bonuses: [{ seat: 3, kind: "straight_flush", combo: "straight flush", pointsEach: 8 }],
+    standIns: [
+      { played: false, who: null },
+      { played: true, who: "Ralph" },
+      { played: true, who: "computer" },
+      { played: false, who: null },
+    ],
+  });
+  assert.equal(shouldPostGameScores(finished.roundOver), true);
+
+  const gameId = gameIdFor("table-1", 24, 11);
+  const report = gameWebhookPayload({
+    gameId,
+    tableCode: "ABC123",
+    season: 24,
+    round: 11,
+    date: "2026-10-24",
+    players,
+    finalTotals: finished.runningTotals,
+    hands: [finished, first, closing],
+  });
+  const again = gameWebhookPayload({
+    gameId: gameIdFor("table-1", 24, 11),
+    tableCode: "ABC123",
+    season: 24,
+    round: 11,
+    date: "1999-01-01",
+    players: ["wrong"],
+    finalTotals: [1, 1, 1, 1],
+    hands: [finished, first, closing],
+  });
+  assert.equal(report.type, "game");
+  assert.equal(report.version, 1);
+  assert.equal(report.gameId, "table-1:24:11");
+  assert.equal(again.gameId, report.gameId);
+  assert.notEqual(gameIdFor("table-1", 24, 12), report.gameId);
+  assert.deepEqual(again, report);
+  assert.equal(report.date, "2026-10-24");
+  assert.deepEqual(report.players, players);
+  assert.deepEqual(report.finalTotals, [28, 60, 55, 49]);
+  assert.equal(report.winner, "Justin");
+  assert.deepEqual(report.hands.map((hand) => hand.hand), [1, 2, 3]);
+  assert.equal(report.hands[0].roundOver, false);
+  assert.equal(report.hands[0].roundWinner, null);
+  assert.deepEqual(report.hands[0].bonuses, [{ player: "Mary", combo: "four of a kind", pointsEach: 2 }]);
+  assert.deepEqual(report.hands[0].standIns[1], { played: true, who: "Ralph" });
+  assert.equal(report.hands[1].hasBots, true);
+  assert.deepEqual(report.hands[1].bots, ["Bot Ruby"]);
+  assert.equal(report.hands[2].roundWinner, "Justin");
+  assert.deepEqual(Object.keys(report), [
+    "type",
+    "version",
+    "gameId",
+    "tableCode",
+    "season",
+    "round",
+    "date",
+    "players",
+    "finalTotals",
+    "winner",
+    "hands",
+  ]);
+  assert.deepEqual(Object.keys(report.hands[2]), [
+    "handId",
+    "tableCode",
+    "season",
+    "round",
+    "hand",
+    "date",
+    "players",
+    "cardsLeft",
+    "handPoints",
+    "bonuses",
+    "runningTotals",
+    "roundOver",
+    "roundWinner",
+    "hasBots",
+    "bots",
+    "standIns",
+  ]);
+  const tied = gameWebhookPayload({
+    gameId: gameIdFor("table-1", 24, 11),
+    tableCode: "ABC123",
+    season: 24,
+    round: 11,
+    date: "2026-10-24",
+    players,
+    finalTotals: [12, 12, 40, 51],
+    hands: [
+      webhookPayload({
+        handId: "hand-tie",
+        tableCode: "ABC123",
+        season: 24,
+        round: 11,
+        hand: 4,
+        date: "2026-10-24",
+        players,
+        cardsLeft: [1, 1, 4, 9],
+        handPoints: [1, 1, 4, 9],
+        runningTotals: [12, 12, 40, 51],
+        roundOver: true,
+        bonuses: [],
+      }),
+    ],
+  });
+  assert.equal(tied.winner, "Justin, Mary");
 });
 
 test("a finishing bonus is included before the 50-point check", () => {

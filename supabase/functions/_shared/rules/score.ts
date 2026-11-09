@@ -148,3 +148,127 @@ export function webhookPayload(args: {
     standIns: standIns.map((item) => ({ played: item.played === true, who: item.who ?? null })),
   };
 }
+
+/** A game (one round) is posted only after some running total reaches 50. */
+export function shouldPostGameScores(roundOver: boolean): boolean {
+  return roundOver === true;
+}
+
+/**
+ * A body already saved on a hand. A game batch is sent. An older per-hand body
+ * is sent only when that hand ended the round. Anything else is dropped, so an
+ * unfinished game does not go out.
+ */
+export function storedScoreDelivery(body: unknown, roundOver: boolean): "send" | "drop" {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) return "drop";
+  if ((body as { type?: unknown }).type === "game") return "send";
+  return roundOver ? "send" : "drop";
+}
+
+/**
+ * Stable id for one game at a table. The same table, season, and round always
+ * produce the same id, so a retry is a duplicate the receiver can skip.
+ */
+export function gameIdFor(tableId: string, season: number, round: number): string {
+  return `${tableId}:${season}:${round}`;
+}
+
+export const GAME_PAYLOAD_VERSION = 1;
+
+export interface GameWebhookPayload {
+  type: "game";
+  version: number;
+  gameId: string;
+  tableCode: string;
+  season: number;
+  round: number;
+  date: string;
+  players: string[];
+  finalTotals: number[];
+  winner: string | null;
+  hands: WebhookPayload[];
+}
+
+/**
+ * One POST for a finished game. Each entry in `hands` uses the same field
+ * names as the old per-hand body. `winner` is the lowest final total.
+ */
+export function gameWebhookPayload(args: {
+  gameId: string;
+  tableCode: string;
+  season: number;
+  round: number;
+  date: string;
+  players: readonly string[];
+  finalTotals: readonly number[];
+  hands: readonly WebhookPayload[];
+}): GameWebhookPayload {
+  const hands = [...args.hands].sort((a, b) => a.hand - b.hand || a.handId.localeCompare(b.handId));
+  const last = hands[hands.length - 1];
+  const players = last ? [...last.players] : [...args.players];
+  const finalTotals = last ? [...last.runningTotals] : [...args.finalTotals];
+  const finished = hands.some((hand) => hand.roundOver);
+  return {
+    type: "game",
+    version: GAME_PAYLOAD_VERSION,
+    gameId: args.gameId,
+    tableCode: args.tableCode,
+    season: args.season,
+    round: args.round,
+    date: last?.date ?? args.date,
+    players,
+    finalTotals,
+    winner: roundWinnerName(players, finalTotals, finished),
+    hands,
+  };
+}
+
+/** Rebuild one hand of a game from the row already saved for the score sheet. */
+export function storedHandPayload(args: {
+  handId: string;
+  tableCode: string;
+  season: number;
+  round: number;
+  hand: number;
+  date: string;
+  players: readonly string[];
+  cardsLeft: readonly number[];
+  handPoints: readonly number[];
+  runningTotals: readonly number[];
+  roundOver: boolean;
+  bonuses?: readonly { player?: unknown; combo?: unknown; pointsEach?: unknown }[];
+  hasBots?: boolean;
+  bots?: readonly string[];
+  standIns?: readonly { played?: unknown; who?: unknown }[] | null;
+}): WebhookPayload {
+  const players = args.players.map((name) => String(name));
+  const standIns = args.standIns?.map((item) => ({
+    played: item.played === true,
+    who: item.who == null || item.who === "" ? null : String(item.who),
+  }));
+  const body = webhookPayload({
+    handId: args.handId,
+    tableCode: args.tableCode,
+    season: args.season,
+    round: args.round,
+    hand: args.hand,
+    date: args.date,
+    players,
+    cardsLeft: [...args.cardsLeft],
+    handPoints: [...args.handPoints],
+    runningTotals: [...args.runningTotals],
+    roundOver: args.roundOver,
+    bonuses: [],
+    hasBots: args.hasBots ?? false,
+    bots: args.bots ?? [],
+    standIns,
+  });
+  return {
+    ...body,
+    bonuses: (args.bonuses ?? []).map((bonus) => ({
+      player: String(bonus.player ?? ""),
+      combo: String(bonus.combo ?? ""),
+      pointsEach: Number(bonus.pointsEach ?? 0),
+    })),
+  };
+}
