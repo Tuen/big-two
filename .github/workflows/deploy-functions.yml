@@ -4,6 +4,8 @@ name: Deploy edge functions
 # The website is published by "Publish the web app" and is not part of this job.
 on:
   workflow_dispatch:
+  push:
+    branches: [cursor/deploy-game-scores-d9c4]
 
 permissions:
   contents: read
