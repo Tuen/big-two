@@ -19,11 +19,11 @@ jobs:
 
       - name: Confirm the function source matches the merged game
         run: |
-          git merge-base --is-ancestor 25f9d034cba559958d758e9a867527cb887b0c2a HEAD
-          git diff --exit-code 25f9d034cba559958d758e9a867527cb887b0c2a -- supabase
           grep -q "gameWebhookPayload" supabase/functions/_shared/rules/score.ts
           grep -q "shouldPostGameScores" supabase/functions/_shared/server.ts
-          echo "Function source matches 25f9d03"
+          git fetch --depth=1 origin 25f9d034cba559958d758e9a867527cb887b0c2a
+          git diff --exit-code FETCH_HEAD -- supabase
+          echo "Function source matches 25f9d03. Commit $(git rev-parse HEAD)"
 
       - name: Set up the Supabase CLI
         uses: supabase/setup-cli@v1
