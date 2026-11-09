@@ -4,7 +4,7 @@ Four people play Big Two (Choh Dai Di) in a browser. There are no computer playe
 
 The playable page is [https://tuen.github.io/big-two/](https://tuen.github.io/big-two/). Phones and computers open that address. Nothing on this PC has to stay on.
 
-You can also pass one phone around the table. **Play on this device** uses the same rules and does not send scores anywhere. The score webhook runs on the server, after a real online hand.
+You can also pass one phone around the table. **Play on this device** uses the same rules and does not send scores anywhere. The score webhook runs on the server, once, after a real online game finishes.
 
 The house rules are in [RULES.md](RULES.md).
 
@@ -149,7 +149,11 @@ The host can also fill an empty seat with a computer player: Easy, Normal, or Ha
 
 ## Score webhook
 
-When an online hand finishes, the Edge Function POSTs one JSON body to `SCORE_WEBHOOK_URL`. Practice mode does not POST. Bonuses played during the hand are stored on that same hand and go out in this one request. The body is saved on the hand, so a retry sends the same `handId`.
+When an online game finishes, the Edge Function POSTs one JSON body to `SCORE_WEBHOOK_URL`. A game is one round. It finishes when any player's running total reaches 50 or more. Every completed hand of that game is already saved for the score sheet. Those hands go out together in this one request. A game that never reaches 50 sends nothing, even if several hands were played and the table was then left alone. A hand already waiting from the old per-hand sender is cleared instead of posted, unless that hand is the one that ended the round. That last hand, if it is still waiting, is sent as it was saved.
+
+Practice on this device does not POST. An online game that used computer players still POSTs when it finishes, and each hand keeps its own `hasBots` flag. Bonuses played during a hand are stored on that hand and go out inside that hand's entry. The body is saved on the hand that ended the game, so a retry sends the same `gameId`.
+
+The score sheet still lists every completed hand of the current round, whether or not the round has reached 50. Nothing is removed when a table is abandoned. You cannot start another round until this one finishes, so those hands stay on the score sheet when someone comes back to the table. The delivery line (**Scores sent ✓**, **Scores failed**, **Scores not sent**, or **Sending scores**) is shown on the hand that ended the game, because that is the request that was sent.
 
 Set these in the Supabase dashboard: Project Settings, Edge Functions, Secrets. Or from the linked CLI:
 
@@ -159,7 +163,7 @@ npx supabase secrets set SCORE_WEBHOOK_URL=https://your-host.example/scores SCOR
 
 | Secret | Role |
 | --- | --- |
-| `SCORE_WEBHOOK_URL` | Where to POST. If this is unset, the hand is marked `skipped` and nothing is sent. |
+| `SCORE_WEBHOOK_URL` | Where to POST. If this is unset, the finished game is marked `skipped` and nothing is sent. |
 | `SCORE_WEBHOOK_KEY` | Sent as the header value, with no `Bearer` prefix. |
 | `SCORE_WEBHOOK_KEY_HEADER` | Header name. Letters, digits, and hyphens, 1 to 64 characters. If unset, the header is `X-Score-Key`. |
 
@@ -167,37 +171,74 @@ Leave the URL unset until the receiver exists. Do not put the URL or the key in 
 
 An older secret name, `SCORE_WEBHOOK_SECRET`, still works when `SCORE_WEBHOOK_KEY` is unset. In that case the header defaults to `X-Score-Secret` unless `SCORE_WEBHOOK_KEY_HEADER` is set.
 
-The first attempt bursts up to 5 tries, waiting 400 ms, 800 ms, 1.6 s, and 3.2 s between them. Each try is a row in `webhook_log` (status code and a short detail, not the response body). A later `tick` that finds the hand `failed` makes one more try, up to 15 tries in total. A hand already marked `sending` is left alone unless that claim is older than 60 seconds. `handId` does not change, so the receiver can ignore a duplicate.
-
-The score sheet and the hand-over screen show **Scores sent ✓**, **Scores failed**, **Scores not sent**, or **Sending scores**.
+The first attempt bursts up to 5 tries, waiting 400 ms, 800 ms, 1.6 s, and 3.2 s between them. Each try is a row in `webhook_log` (status code and a short detail, not the response body). A later `tick` that finds the game `failed` makes one more try, up to 15 tries in total. That retry still runs after the next round has been dealt. A game already marked `sending` is left alone unless that claim is older than 60 seconds. `gameId` does not change, and the retry sends the saved body, so the receiver can ignore a duplicate.
 
 ```json
 {
-  "handId": "the-hand-uuid",
+  "type": "game",
+  "version": 1,
+  "gameId": "6f1c2a0e-4b7d-4e1a-9c3f-8a2b6d0e1f44:24:11",
   "tableCode": "ABC123",
   "season": 24,
   "round": 11,
-  "hand": 3,
   "date": "2026-10-24",
   "players": ["Justin", "Mary", "Pauline", "Damien"],
-  "cardsLeft": [0, 11, 9, 4],
-  "handPoints": [8, 30, 17, 4],
-  "bonuses": [{ "player": "Damien", "combo": "straight flush", "pointsEach": 8 }],
-  "runningTotals": [28, 60, 55, 49],
-  "roundOver": true,
-  "roundWinner": "Justin",
-  "hasBots": false,
-  "bots": [],
-  "standIns": [
-    { "played": false, "who": null },
-    { "played": true, "who": "Ralph" },
-    { "played": true, "who": "computer" },
-    { "played": false, "who": null }
+  "finalTotals": [28, 60, 55, 49],
+  "winner": "Justin",
+  "hands": [
+    {
+      "handId": "11111111-1111-1111-1111-111111111111",
+      "tableCode": "ABC123",
+      "season": 24,
+      "round": 11,
+      "hand": 1,
+      "date": "2026-10-24",
+      "players": ["Justin", "Mary", "Pauline", "Damien"],
+      "cardsLeft": [0, 5, 2, 1],
+      "handPoints": [0, 5, 2, 1],
+      "bonuses": [],
+      "runningTotals": [0, 5, 2, 1],
+      "roundOver": false,
+      "roundWinner": null,
+      "hasBots": false,
+      "bots": [],
+      "standIns": [
+        { "played": false, "who": null },
+        { "played": false, "who": null },
+        { "played": false, "who": null },
+        { "played": false, "who": null }
+      ]
+    },
+    {
+      "handId": "33333333-3333-3333-3333-333333333333",
+      "tableCode": "ABC123",
+      "season": 24,
+      "round": 11,
+      "hand": 3,
+      "date": "2026-10-24",
+      "players": ["Justin", "Mary", "Pauline", "Damien"],
+      "cardsLeft": [0, 11, 9, 4],
+      "handPoints": [8, 30, 17, 4],
+      "bonuses": [{ "player": "Damien", "combo": "straight flush", "pointsEach": 8 }],
+      "runningTotals": [28, 60, 55, 49],
+      "roundOver": true,
+      "roundWinner": "Justin",
+      "hasBots": false,
+      "bots": [],
+      "standIns": [
+        { "played": false, "who": null },
+        { "played": true, "who": "Ralph" },
+        { "played": true, "who": "computer" },
+        { "played": false, "who": null }
+      ]
+    }
   ]
 }
 ```
 
-`date` is the calendar date in the table's timezone. `handPoints` is card points plus bonuses that player was given during the hand. In the example, cards left of 0, 11, 9, and 4 are worth 0, 22, 9, and 4. Damien's straight flush added 8 to the other three, which is why their hand points are 8, 30, 17, and 4. `roundWinner` is null until the round is over. If two players share the lowest total, the names are joined in seat order, such as `"Justin, Mary"`. `hasBots` is true when the hand included a computer player added in the lobby, and `bots` lists those display names. An all-human hand sends false and an empty list. A stand-in does not set `hasBots`. `standIns` is one entry per seat: `played` is true when a watcher or a computer sat in for that hand, and `who` is the watcher name, `computer`, or both in the order they sat. The `players` names stay the original names. Every field that was already there is unchanged.
+`type` is `"game"` and `version` is `1`, so a receiver can tell this apart from the old one-hand body. `gameId` is the table id, the season, and the round, joined with colons. It stays the same for every retry of that game. `round` is the game number. `date` is the calendar date of the last hand, in the table's timezone. `finalTotals` are the running totals after that hand. `winner` is the lowest of those totals. If two players share it, the names are joined in seat order, such as `"Justin, Mary"`.
+
+Each object in `hands` uses the same field names as the old per-hand body. `handPoints` is card points plus bonuses that player was given during the hand. In the last hand above, cards left of 0, 11, 9, and 4 are worth 0, 22, 9, and 4. Damien's straight flush added 8 to the other three, which is why their hand points are 8, 30, 17, and 4. `roundWinner` on a hand is null until that hand ends the game. `hasBots` is true when that hand included a computer player added in the lobby, and `bots` lists those display names. An all-human hand sends false and an empty list. A stand-in does not set `hasBots`. `standIns` is one entry per seat: `played` is true when a watcher or a computer sat in for that hand, and `who` is the watcher name, `computer`, or both in the order they sat. The `players` names stay the original names.
 
 **Scores → Export round as CSV** still copies a sheet you can paste into Excel. The snackbar says "Round CSV copied. Paste it into Excel."
 

@@ -169,3 +169,87 @@ WebhookPayload webhookPayload({
     ],
   );
 }
+
+/// A game (one round) is posted only after some running total reaches 50.
+bool shouldPostGameScores(bool roundOver) => roundOver;
+
+/// Same table, season, and round always produce the same id, so a retry can be skipped.
+String gameIdFor(String tableId, int season, int round) => "$tableId:$season:$round";
+
+const gamePayloadVersion = 1;
+
+class GameWebhookPayload {
+  final String type;
+  final int version;
+  final String gameId;
+  final String tableCode;
+  final int season;
+  final int round;
+  final String date;
+  final List<String> players;
+  final List<int> finalTotals;
+  final String? winner;
+  final List<WebhookPayload> hands;
+  const GameWebhookPayload({
+    required this.type,
+    required this.version,
+    required this.gameId,
+    required this.tableCode,
+    required this.season,
+    required this.round,
+    required this.date,
+    required this.players,
+    required this.finalTotals,
+    required this.winner,
+    required this.hands,
+  });
+
+  Map<String, Object?> toJson() => {
+        "type": type,
+        "version": version,
+        "gameId": gameId,
+        "tableCode": tableCode,
+        "season": season,
+        "round": round,
+        "date": date,
+        "players": players,
+        "finalTotals": finalTotals,
+        "winner": winner,
+        "hands": [for (final hand in hands) hand.toJson()],
+      };
+}
+
+/// One POST for a finished game. Each hand keeps the old field names.
+/// [winner] is the lowest final total.
+GameWebhookPayload gameWebhookPayload({
+  required String gameId,
+  required String tableCode,
+  required int season,
+  required int round,
+  required String date,
+  required List<String> players,
+  required List<int> finalTotals,
+  required List<WebhookPayload> hands,
+}) {
+  final ordered = [...hands]..sort((a, b) {
+      final byHand = a.hand.compareTo(b.hand);
+      return byHand != 0 ? byHand : a.handId.compareTo(b.handId);
+    });
+  final last = ordered.isEmpty ? null : ordered.last;
+  final names = last == null ? [...players] : [...last.players];
+  final totals = last == null ? [...finalTotals] : [...last.runningTotals];
+  final finished = ordered.any((hand) => hand.roundOver);
+  return GameWebhookPayload(
+    type: "game",
+    version: gamePayloadVersion,
+    gameId: gameId,
+    tableCode: tableCode,
+    season: season,
+    round: round,
+    date: last?.date ?? date,
+    players: names,
+    finalTotals: totals,
+    winner: roundWinnerName(names, totals, finished),
+    hands: ordered,
+  );
+}

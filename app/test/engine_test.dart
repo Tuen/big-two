@@ -380,6 +380,131 @@ void main() {
     expect(body.bonuses, [
       {"player": "Damien", "combo": "straight flush", "pointsEach": 8},
     ]);
+    expect(shouldPostGameScores(score.roundOver), isTrue);
+  });
+
+  test("a finished game is one payload, and 49 does not post", () {
+    final players = ["Justin", "Mary", "Pauline", "Damien"];
+    final under = scoreCounts([1, 1, 1, 1], [10, 20, 30, 48], []);
+    expect(under.roundOver, isFalse);
+    expect(shouldPostGameScores(under.roundOver), isFalse);
+    final early = webhookPayload(
+      handId: "hand-2",
+      tableCode: "ABC123",
+      season: 24,
+      round: 11,
+      hand: 2,
+      date: "2026-10-23",
+      players: players,
+      cardsLeft: [0, 4, 3, 2],
+      handPoints: [0, 4, 3, 2],
+      runningTotals: [10, 24, 12, 6],
+      roundOver: false,
+      bonuses: const <Bonus>[],
+    );
+    final closing = webhookPayload(
+      handId: "hand-1",
+      tableCode: "ABC123",
+      season: 24,
+      round: 11,
+      hand: 1,
+      date: "2026-10-22",
+      players: players,
+      cardsLeft: [0, 5, 2, 1],
+      handPoints: [0, 5, 2, 1],
+      runningTotals: [10, 20, 9, 4],
+      roundOver: false,
+      bonuses: const <Bonus>[],
+      standIns: [
+        {"played": false, "who": null},
+        {"played": true, "who": "Ralph"},
+        {"played": false, "who": null},
+        {"played": false, "who": null},
+      ],
+    );
+    final finished = webhookPayload(
+      handId: "hand-3",
+      tableCode: "ABC123",
+      season: 24,
+      round: 11,
+      hand: 3,
+      date: "2026-10-24",
+      players: players,
+      cardsLeft: [0, 11, 9, 4],
+      handPoints: [8, 30, 17, 4],
+      runningTotals: [28, 60, 55, 49],
+      roundOver: true,
+      bonuses: [const Bonus(seat: 3, kind: "straight_flush", combo: "straight flush", pointsEach: 8)],
+    );
+    final report = gameWebhookPayload(
+      gameId: gameIdFor("table-1", 24, 11),
+      tableCode: "ABC123",
+      season: 24,
+      round: 11,
+      date: "2026-10-24",
+      players: players,
+      finalTotals: finished.runningTotals,
+      hands: [finished, early, closing],
+    );
+    final again = gameWebhookPayload(
+      gameId: gameIdFor("table-1", 24, 11),
+      tableCode: "ABC123",
+      season: 24,
+      round: 11,
+      date: "1999-01-01",
+      players: const ["wrong"],
+      finalTotals: const [1, 1, 1, 1],
+      hands: [finished, early, closing],
+    );
+    expect(report.type, "game");
+    expect(report.version, 1);
+    expect(report.gameId, "table-1:24:11");
+    expect(again.toJson(), report.toJson());
+    expect(gameIdFor("table-1", 24, 12), isNot(report.gameId));
+    expect(report.winner, "Justin");
+    expect(report.finalTotals, [28, 60, 55, 49]);
+    expect(report.hands.map((hand) => hand.hand).toList(), [1, 2, 3]);
+    expect(report.hands.first.standIns[1]["who"], "Ralph");
+    expect(report.hands.last.roundWinner, "Justin");
+    expect(report.toJson().keys.toList(), [
+      "type",
+      "version",
+      "gameId",
+      "tableCode",
+      "season",
+      "round",
+      "date",
+      "players",
+      "finalTotals",
+      "winner",
+      "hands",
+    ]);
+    final tied = gameWebhookPayload(
+      gameId: gameIdFor("table-1", 24, 11),
+      tableCode: "ABC123",
+      season: 24,
+      round: 11,
+      date: "2026-10-24",
+      players: players,
+      finalTotals: const [12, 12, 40, 51],
+      hands: [
+        webhookPayload(
+          handId: "hand-tie",
+          tableCode: "ABC123",
+          season: 24,
+          round: 11,
+          hand: 4,
+          date: "2026-10-24",
+          players: players,
+          cardsLeft: [1, 1, 4, 9],
+          handPoints: [1, 1, 4, 9],
+          runningTotals: [12, 12, 40, 51],
+          roundOver: true,
+          bonuses: const <Bonus>[],
+        ),
+      ],
+    );
+    expect(tied.winner, "Justin, Mary");
   });
 
   test("a finishing royal flush is scored before the round check", () {
