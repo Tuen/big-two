@@ -44,7 +44,7 @@ function key(ids: string[], wrap = false): number[] {
   return combo(ids, wrap).key;
 }
 
-test("card points: 9 stays 9, 10-12 double, 13 is 36", () => {
+test("card points: 9 stays 9, 10-12 double, 13 is 39", () => {
   assert.equal(cardPoints(0), 0);
   assert.equal(cardPoints(1), 1);
   assert.equal(cardPoints(8), 8);
@@ -52,7 +52,7 @@ test("card points: 9 stays 9, 10-12 double, 13 is 36", () => {
   assert.equal(cardPoints(10), 20);
   assert.equal(cardPoints(11), 22);
   assert.equal(cardPoints(12), 24);
-  assert.equal(cardPoints(13), 36);
+  assert.equal(cardPoints(13), 39);
 });
 
 test("singles, pairs and triples compare by rank, then suit", () => {
@@ -714,10 +714,10 @@ test("49 does not end the round, 50 does, and a tie shares the win", () => {
   assert.deepEqual(roundWinners([5, 9, 4, 4]), [2, 3]);
 });
 
-test("thirteen cards left score 36 for a player who never played", () => {
+test("thirteen cards left score 39 for a player who never played", () => {
   const score = scoreCounts([0, 13, 9, 10], [0, 0, 0, 0], []);
-  assert.deepEqual(score.cardPoints, [0, 36, 9, 20]);
-  assert.deepEqual(score.handPoints, [0, 36, 9, 20]);
+  assert.deepEqual(score.cardPoints, [0, 39, 9, 20]);
+  assert.deepEqual(score.handPoints, [0, 39, 9, 20]);
 });
 
 test("a player stuck with a single 2 passes the lead, and four skips close the hand", () => {

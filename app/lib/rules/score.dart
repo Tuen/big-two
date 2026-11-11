@@ -6,10 +6,10 @@ class Bonus {
   const Bonus({required this.seat, required this.kind, required this.combo, required this.pointsEach});
 }
 
-/// 9 stays 9. 10, 11 and 12 double. 13 cards left score 36.
+/// 9 stays 9. 10, 11 and 12 double. 13 cards left score 39 (13 x 3).
 int cardPoints(int cardsLeft) {
   if (cardsLeft <= 0) return 0;
-  if (cardsLeft == 13) return 36;
+  if (cardsLeft == 13) return cardsLeft * 3;
   if (cardsLeft >= 10 && cardsLeft <= 12) return cardsLeft * 2;
   return cardsLeft;
 }
