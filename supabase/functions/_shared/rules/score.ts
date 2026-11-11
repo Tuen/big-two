@@ -5,10 +5,10 @@ export interface Bonus {
   pointsEach: number;
 }
 
-/** Points for a count of cards left. 9 stays 9. 10, 11 and 12 double. 13 is 36. */
+/** Points for a count of cards left. 9 stays 9. 10, 11 and 12 double. 13 is 39 (13 x 3). */
 export function cardPoints(cardsLeft: number): number {
   if (cardsLeft <= 0) return 0;
-  if (cardsLeft === 13) return 36;
+  if (cardsLeft === 13) return cardsLeft * 3;
   if (cardsLeft >= 10 && cardsLeft <= 12) return cardsLeft * 2;
   return cardsLeft;
 }

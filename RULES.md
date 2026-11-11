@@ -111,7 +111,7 @@ Each card left is 1 point, with three exceptions:
 
 - 9 cards left score 9. They are not doubled.
 - 10, 11, or 12 cards left are doubled: 20, 22, 24.
-- 13 cards left, never having played a card, score 36.
+- 13 cards left, never having played a card, score 39 (13 x 3).
 
 These bonuses are added to **every other** player's running total at the moment the combination is played, not at the end of the hand. The player who played it does not take the penalty.
 

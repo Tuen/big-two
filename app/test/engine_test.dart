@@ -14,7 +14,7 @@ Combo mustCombo(List<String> ids, {bool wrap = false}) {
 }
 
 void main() {
-  test("card points: 9 stays 9, 10-12 double, 13 is 36", () {
+  test("card points: 9 stays 9, 10-12 double, 13 is 39", () {
     expect(cardPoints(0), 0);
     expect(cardPoints(1), 1);
     expect(cardPoints(8), 8);
@@ -22,7 +22,7 @@ void main() {
     expect(cardPoints(10), 20);
     expect(cardPoints(11), 22);
     expect(cardPoints(12), 24);
-    expect(cardPoints(13), 36);
+    expect(cardPoints(13), 39);
   });
 
   test("singles, pairs and triples compare by rank, then suit", () {
@@ -531,8 +531,10 @@ void main() {
     expect(under.roundOver, isFalse);
     expect(scoreCounts([0, 0, 0, 1], [50, 10, 10, 10], []).roundOver, isTrue);
     expect(roundWinners([12, 12, 40, 51]), [0, 1]);
-    expect(cardPoints(13), 36);
-    expect(scoreCounts([0, 13, 9, 10], [0, 0, 0, 0], []).cardPointList, [0, 36, 9, 20]);
+    expect(cardPoints(13), 39);
+    final untouched = scoreCounts([0, 13, 9, 10], [0, 0, 0, 0], []);
+    expect(untouched.cardPointList, [0, 39, 9, 20]);
+    expect(untouched.handPoints, [0, 39, 9, 20]);
   });
 
   test("a stuck deuce passes the lead, and four skips close the hand", () {
