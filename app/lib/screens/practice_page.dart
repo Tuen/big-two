@@ -359,10 +359,11 @@ class _PracticePageState extends State<PracticePage> {
     if (state == null) return;
     StepOk? last;
     for (var i = 0; i < 3; i++) {
-      if (state!.status != "playing" || state!.trick == null) break;
-      final step = applyPass(state!, state!.turn, _settings);
+      final HandState? current = state;
+      if (current == null || current.status != "playing" || current.trick == null) break;
+      final step = applyPass(current, current.turn, _settings);
       if (step is! StepOk) break;
-      _remember(state!.turn, "pass", const [], "Pass");
+      _remember(current.turn, "pass", const [], "Pass");
       last = step;
       state = step.state;
     }
@@ -736,12 +737,6 @@ class _PracticePageState extends State<PracticePage> {
             onChanged: (value) => setState(() => _settings = _settings.copyWith(passLocks: value)),
           ),
           SwitchListTile(
-            value: _settings.autoplay,
-            title: const Text("Autoplay"),
-            subtitle: const Text("Off until you turn it on. Pass a short hand or the best play of its kind. A single 2♠ is always passed."),
-            onChanged: (value) => setState(() => _settings = _settings.copyWith(autoplay: value)),
-          ),
-          SwitchListTile(
             value: _settings.straightsWrap,
             title: const Text("Straight wrap"),
             subtitle: const Text("Saved for this game. A straight still cannot pass the 2."),
@@ -771,6 +766,13 @@ class _PracticePageState extends State<PracticePage> {
             ),
           ),
           const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _settings.autoplay,
+            title: const Text("Autoplay"),
+            subtitle: const Text("Off until you turn it on. Pass a short hand or the best play of its kind. A single 2♠ is always passed."),
+            onChanged: (value) => setState(() => _settings = _settings.copyWith(autoplay: value)),
+          ),
           FilledButton(
             onPressed: () => _runDeal(_deal),
             child: const Text("Deal"),

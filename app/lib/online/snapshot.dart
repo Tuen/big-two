@@ -213,16 +213,16 @@ class TableSnapshot {
       status: json["status"].toString(),
       hostId: json["hostId"].toString(),
       you: _int(json["you"]),
-      season: _int(json["season"]),
+      season: _int(json["season"], _int(settingsJson["season"], 24)),
       round: _int(json["round"]),
       hand: _int(json["hand"]),
       settings: Settings(
         passLocks: settingsJson["passLocks"] == true,
-        straightsWrap: settingsJson["straightsWrap"] == true,
+        straightsWrap: settingsJson["straightsWrap"] == true || settingsJson["straightWrap"] == true,
         turnTimerSeconds: _int(settingsJson["turnTimerSeconds"]),
-        season: _int(settingsJson["season"]),
+        season: _int(settingsJson["season"], 24),
         timezone: settingsJson["timezone"]?.toString() ?? "Australia/Melbourne",
-        firstRoundNumber: _int(settingsJson["firstRoundNumber"]),
+        firstRoundNumber: _int(settingsJson["firstRoundNumber"], 1),
         autoplay: settingsJson["autoplay"] == true,
       ),
       seats: [
@@ -379,7 +379,14 @@ TableSnapshot mergeTableHistory(TableSnapshot? previous, TableSnapshot next) {
   return next.withHistory(history, historyDelta: false);
 }
 
-int _int(dynamic value) => value is int ? value : (value as num).toInt();
+/// Missing numbers are [ifMissing]. The Android table omits season and the
+/// first-round number; those are not part of its settings object.
+int _int(dynamic value, [int ifMissing = 0]) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  if (value is String) return int.tryParse(value) ?? ifMissing;
+  return ifMissing;
+}
 
 UndoPrompt? _undoFrom(Object? raw) {
   if (raw is! Map) return null;

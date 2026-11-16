@@ -661,8 +661,9 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
     TableSounds.instance.handOver(roundOver: next.roundOver || next.status == "round_end");
   }
 
-  Future<void> _toggleSound() async {
-    final next = !_sound;
+  Future<void> _toggleSound() => _setSound(!_sound);
+
+  Future<void> _setSound(bool next) async {
     setState(() {
       _sound = next;
       TableSounds.instance.enabled = next;
@@ -828,12 +829,6 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
               onChanged: (value) => _saveSettings(view, view.settings.copyWith(passLocks: value)),
             ),
             SwitchListTile(
-              value: view.settings.autoplay,
-              title: const Text("Autoplay"),
-              subtitle: const Text("Off until you turn it on. Pass a short hand or the best play of its kind. A single 2♠ is always passed."),
-              onChanged: (value) => _saveSettings(view, view.settings.copyWith(autoplay: value)),
-            ),
-            SwitchListTile(
               value: view.settings.straightsWrap,
               title: const Text("Straight wrap"),
               subtitle: const Text("Saved with the table. A straight still cannot pass the 2."),
@@ -885,6 +880,14 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
             ),
           ],
           const SizedBox(height: 12),
+          LobbySoundAutoplay(
+            sound: _sound,
+            onSound: (value) => _setSound(value),
+            autoplay: view.settings.autoplay,
+            onAutoplay: host && view.canEditSettings
+                ? (value) => _saveSettings(view, view.settings.copyWith(autoplay: value))
+                : null,
+          ),
           FilledButton(
             onPressed: view.canDeal ? () => _send("deal", {"tableId": view.tableId}) : null,
             child: const Text("Deal"),
@@ -1306,5 +1309,45 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
       if (hand.hand == view.hand && hand.round == view.round) return scoreDeliveryLabel(hand.scoreStatus);
     }
     return null;
+  }
+}
+
+/// Sound, then Autoplay, on the pre-deal lobby. Autoplay is read-only unless
+/// [onAutoplay] is set, which is only the host before the deal.
+class LobbySoundAutoplay extends StatelessWidget {
+  final bool sound;
+  final ValueChanged<bool>? onSound;
+  final bool autoplay;
+  final ValueChanged<bool>? onAutoplay;
+
+  const LobbySoundAutoplay({
+    super.key,
+    required this.sound,
+    required this.onSound,
+    required this.autoplay,
+    required this.onAutoplay,
+  });
+
+  static const subtitle = "Off until you turn it on. Pass a short hand or the best play of its kind. A single 2♠ is always passed.";
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: sound,
+          title: const Text("Sounds"),
+          onChanged: onSound,
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: autoplay,
+          title: const Text("Autoplay"),
+          subtitle: const Text(subtitle),
+          onChanged: onAutoplay,
+        ),
+      ],
+    );
   }
 }

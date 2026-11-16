@@ -2,6 +2,7 @@ import "package:big_two/rules/cards.dart";
 import "package:big_two/rules/combo.dart";
 import "package:big_two/rules/game.dart";
 import "package:big_two/screens/home_page.dart";
+import "package:big_two/screens/online_page.dart";
 import "package:big_two/screens/practice_page.dart";
 import "package:flutter/material.dart";
 import "package:flutter_test/flutter_test.dart";
@@ -52,12 +53,55 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: PracticePage(names: const ["Ada", "Bea", "Cal", "Dee"], settings: defaultSettings, sound: false),
     ));
+    final autoplayText = find.text("Autoplay");
+    for (var step = 0; step < 8 && autoplayText.evaluate().isEmpty; step++) {
+      await tester.drag(find.byType(ListView), const Offset(0, -500));
+      await tester.pump();
+    }
     final tile = tester.widget<SwitchListTile>(find.widgetWithText(SwitchListTile, "Autoplay"));
     expect(tile.value, isFalse);
-    await tester.ensureVisible(find.text("Autoplay"));
+    expect(tile.subtitle, isA<Text>().having((text) => (text).data, "subtitle", contains("best play of its kind")));
+    await tester.ensureVisible(find.text("Deal"));
+    final autoplayTile = find.widgetWithText(SwitchListTile, "Autoplay");
+    final deal = find.widgetWithText(FilledButton, "Deal");
+    expect(tester.getBottomLeft(autoplayTile).dy, lessThanOrEqualTo(tester.getTopLeft(deal).dy));
+    expect(tester.getTopLeft(deal).dy - tester.getBottomLeft(autoplayTile).dy, lessThan(24));
     await tester.tap(find.text("Autoplay"));
     await tester.pump();
     expect(tester.widget<SwitchListTile>(find.widgetWithText(SwitchListTile, "Autoplay")).value, isTrue);
+  });
+
+  testWidgets("the online lobby puts Autoplay under Sounds, read-only for a guest", (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: LobbySoundAutoplay(sound: true, onSound: null, autoplay: true, onAutoplay: null),
+      ),
+    ));
+    expect(find.text("Sounds"), findsOneWidget);
+    expect(find.text("Autoplay"), findsOneWidget);
+    expect(tester.getTopLeft(find.text("Sounds")).dy, lessThan(tester.getTopLeft(find.text("Autoplay")).dy));
+    final autoplay = tester.widget<SwitchListTile>(find.widgetWithText(SwitchListTile, "Autoplay"));
+    expect(autoplay.value, isTrue);
+    expect(autoplay.onChanged, isNull);
+  });
+
+  testWidgets("the host can toggle lobby Autoplay", (tester) async {
+    var autoplay = false;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: StatefulBuilder(
+          builder: (context, setState) => LobbySoundAutoplay(
+            sound: false,
+            onSound: (_) {},
+            autoplay: autoplay,
+            onAutoplay: (value) => setState(() => autoplay = value),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text("Autoplay"));
+    await tester.pump();
+    expect(autoplay, isTrue);
   });
 
   for (final wrap in ruleSets) {

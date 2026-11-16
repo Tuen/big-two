@@ -1,7 +1,7 @@
 name: big_two
 description: Big Two (Choh Dai Di) for four players, on a phone or in the browser.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.0+13
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

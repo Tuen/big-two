@@ -44,5 +44,15 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Sideload signing. The keystore and its passwords stay off git.
+/android/key.properties
+/android/app/sideload.keystore
+/android/**/*.keystore
+/android/**/*.jks
+
+# Android app Supabase client (project bqcrogwrdrbscearjhpx).
+# The tracked public-client.json is the web project.
+/public-client.android.json
+
 # Widget Preview related
 .widget_preview/
