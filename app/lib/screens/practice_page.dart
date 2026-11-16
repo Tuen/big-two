@@ -738,7 +738,7 @@ class _PracticePageState extends State<PracticePage> {
           SwitchListTile(
             value: _settings.autoplay,
             title: const Text("Autoplay"),
-            subtitle: const Text("Off until you turn it on. Pass a short hand, a best play, or a play nothing left can beat. A single 2♠ is always passed."),
+            subtitle: const Text("Off until you turn it on. Pass a short hand or the best play of its kind. A single 2♠ is always passed."),
             onChanged: (value) => setState(() => _settings = _settings.copyWith(autoplay: value)),
           ),
           SwitchListTile(

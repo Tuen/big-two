@@ -70,8 +70,6 @@ class HandState {
   final int? winner;
   final int leadSkips;
   final String? closedReason;
-  /// Cards already played face-up this hand, including the current trick.
-  final List<String> faceUp;
 
   const HandState({
     required this.hands,
@@ -89,7 +87,6 @@ class HandState {
     required this.winner,
     required this.leadSkips,
     required this.closedReason,
-    this.faceUp = const [],
   });
 }
 
@@ -171,7 +168,6 @@ HandState makeState({
   List<String>? trickCards,
   int consecutivePasses = 0,
   List<int>? locked,
-  List<String>? faceUp,
 }) {
   final totals = running ?? [0, 0, 0, 0];
   return HandState(
@@ -190,7 +186,6 @@ HandState makeState({
     winner: null,
     leadSkips: 0,
     closedReason: null,
-    faceUp: [...(faceUp ?? trickCards ?? const <String>[])],
   );
 }
 
@@ -315,17 +310,12 @@ String? automaticLastCard(HandState state, int seat, Settings settings) {
 const noPlayMessage = "No play – auto pass";
 const onlyTwosLeadNote = "Only 2s left – can't go out, please pass";
 
-/// Cards still unplayed: the deck, minus cards already played face-up.
-List<PlayingCard> _cardsStillOut(HandState state) {
-  final gone = {...state.faceUp, ...state.trickCards};
-  return [for (final card in fullDeck()) if (!gone.contains(formatCard(card))) card];
-}
-
 /// True when this seat is passed for them.
 /// A lone 2 of spades is always passed. With Autoplay on, a player facing
-/// the current play is also passed when a public check says they cannot
-/// answer it. That check uses the card count and the cards already played.
-/// It does not look at anyone's hidden cards. A new lead is never an auto-pass.
+/// the current play is also passed when they hold too few cards, or the play
+/// is the best of its kind. That check uses the whole deck and the selected
+/// rules. It does not look at hidden cards or at cards already played.
+/// A new lead is never an auto-pass.
 bool shouldAutoPass(HandState state, int seat, Settings settings) {
   if (state.status != "playing" || state.turn != seat) return false;
   final trick = state.trick;
@@ -335,7 +325,7 @@ bool shouldAutoPass(HandState state, int seat, Settings settings) {
   if (state.trickCards.length == 1 && state.trickCards.first == "2S") return true;
   if (!settings.autoplay) return false;
   if (state.hands[seat].length < cardsRequired(trick.kind)) return true;
-  return !anyBeats(trick, _cardsStillOut(state), settings.straightsWrap);
+  return !anyBeats(trick, fullDeck(), settings.straightsWrap);
 }
 
 /// Leading, every card left is a 2, and none of them can be played.
@@ -390,7 +380,6 @@ HandState _withBonus(HandState state, int seat, Combo combo) {
     winner: state.winner,
     leadSkips: state.leadSkips,
     closedReason: state.closedReason,
-    faceUp: state.faceUp,
   );
 }
 
@@ -413,7 +402,6 @@ HandState _copy(HandState state, {
   int? leadSkips,
   String? closedReason,
   bool clearClosed = false,
-  List<String>? faceUp,
 }) {
   return HandState(
     hands: hands ?? state.hands,
@@ -431,7 +419,6 @@ HandState _copy(HandState state, {
     winner: clearWinner ? null : (winner ?? state.winner),
     leadSkips: leadSkips ?? state.leadSkips,
     closedReason: clearClosed ? null : (closedReason ?? state.closedReason),
-    faceUp: faceUp ?? state.faceUp,
   );
 }
 
@@ -456,7 +443,6 @@ Step applyPlay(HandState state, int seat, List<String> cardIds, Settings setting
       trick: combo,
       trickSeat: seat,
       trickCards: cards.map(formatCard).toList(),
-      faceUp: [...state.faceUp, ...cards.map(formatCard)],
       consecutivePasses: 0,
       firstLead: false,
       leadSkips: 0,
