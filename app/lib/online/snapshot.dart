@@ -156,8 +156,6 @@ class TableSnapshot {
   final bool canEditSettings;
   final String? turnStartedAt;
   final List<RecentAction> recent;
-  /// Cards already played face-up this hand. Public. Empty when the view omits them.
-  final List<String> played;
   final bool canUndo;
   final UndoPrompt? undo;
   final bool holding;
@@ -196,7 +194,6 @@ class TableSnapshot {
     required this.canEditSettings,
     required this.turnStartedAt,
     this.recent = const [],
-    this.played = const [],
     this.canUndo = false,
     this.undo,
     this.holding = false,
@@ -304,7 +301,6 @@ class TableSnapshot {
             label: _map(row)["label"]?.toString() ?? "",
           ),
       ],
-      played: [for (final card in (json["played"] as List? ?? const [])) card.toString()],
       canUndo: json["canUndo"] == true,
       undo: _undoFrom(json["undo"]),
       holding: json["holding"] == true,
@@ -355,7 +351,6 @@ class TableSnapshot {
       canEditSettings: canEditSettings,
       turnStartedAt: turnStartedAt,
       recent: recent,
-      played: played,
       canUndo: canUndo,
       undo: undo,
       holding: holding,

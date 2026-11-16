@@ -199,7 +199,8 @@ function playerName(seats: Row[], seat: number): string {
 /**
  * The table may pass a seat without a tap.
  * A lone 2 of spades is always passed. Any other automatic pass happens
- * only when that table's Autoplay setting is on, and only for a public reason.
+ * only when that table's Autoplay setting is on, and only for a short count
+ * or a best play of its kind.
  * Every remaining pass is the player's own button, or the turn timer when one is on.
  */
 function passesAutomatically(table: Row, _seats: Row[]): boolean {
@@ -848,7 +849,6 @@ export async function buildView(
       : null,
     consecutivePasses: state.consecutivePasses,
     locked: state.locked,
-    played: state.faceUp,
     running: score ? score.runningTotals : state.running,
     commitment: hand.commitment,
     deckReveal: hand.deck_reveal,

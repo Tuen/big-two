@@ -12,8 +12,8 @@ const ruleSets = [false, true];
 
 Settings rules(bool wrap, bool autoplay) => defaultSettings.copyWith(straightsWrap: wrap, autoplay: autoplay);
 
-HandState facing(List<String> hand, List<String> table, {List<String> earlier = const [], bool wrap = false}) {
-  final used = {...hand, ...table, ...earlier};
+HandState facing(List<String> hand, List<String> table, {bool wrap = false}) {
+  final used = {...hand, ...table};
   final rest = [for (final card in fullDeck()) if (!used.contains(formatCard(card))) card];
   List<PlayingCard> take(int count) {
     final cards = rest.sublist(0, count);
@@ -29,12 +29,11 @@ HandState facing(List<String> hand, List<String> table, {List<String> earlier = 
     trick: trick,
     trickSeat: 3,
     trickCards: table,
-    faceUp: [...earlier, ...table],
   );
 }
 
 void main() {
-  testWidgets("Autoplay starts off, and the rules explain the three skips", (tester) async {
+  testWidgets("Autoplay starts off, and the rules explain the two skips", (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(MaterialApp(
@@ -48,7 +47,7 @@ void main() {
     expect(rules, findsOneWidget);
     expect(find.textContaining("fewer cards than the play needs"), findsOneWidget);
     expect(find.textContaining("best of its kind"), findsOneWidget);
-    expect(find.textContaining("already been played face-up"), findsOneWidget);
+    expect(find.textContaining("not passed just because the cards that could beat it have already been played"), findsOneWidget);
 
     await tester.pumpWidget(MaterialApp(
       home: PracticePage(names: const ["Ada", "Bea", "Cal", "Dee"], settings: defaultSettings, sound: false),
@@ -74,7 +73,7 @@ void main() {
       final short = facing(["3D"], ["8C", "8D"], wrap: wrap);
       final bestPair = facing(["3D", "4D", "5D", "6D", "7D"], ["2S", "2H"], wrap: wrap);
       final beaten = facing(["3D", "4D", "5D", "6D", "7D"], ["8C", "8D"], wrap: wrap);
-      final heart = facing(["3D", "4D", "5D", "6D", "7D"], ["2H"], earlier: ["2S"], wrap: wrap);
+      final heart = facing(["3D", "4D", "5D", "6D", "7D"], ["2H"], wrap: wrap);
       for (final state in [short, bestPair, beaten, heart]) {
         expect(shouldAutoPass(state, 0, off), isFalse);
       }
@@ -123,39 +122,15 @@ void main() {
       expect(shouldAutoPass(topStraight, 0, on), isFalse);
     });
 
-    test("(C) a play is passed when the cards that beat it are already face-up ($label)", () {
-      final heart = facing(["3D", "4D", "5D", "6D", "7D"], ["2H"], earlier: ["2S"], wrap: wrap);
-      final heartStillOut = facing(["3D", "4D", "5D", "6D", "7D"], ["2H"], wrap: wrap);
-      final lowPair = facing(["3D", "4D", "5D", "6D", "7D"], ["2C", "2D"], earlier: ["2S", "2H"], wrap: wrap);
-      final lowPairLive = facing(["3D", "4D", "5D", "6D", "7D"], ["2C", "2D"], wrap: wrap);
+    test("a play is not auto-passed just because the cards that beat it are gone ($label)", () {
+      final heart = facing(["3D", "4D", "5D", "6D", "7D"], ["2H"], wrap: wrap);
+      final lowPair = facing(["3D", "4D", "5D", "6D", "7D"], ["2C", "2D"], wrap: wrap);
       final lesserTriple = facing(["3D", "4D", "5D", "6D", "7D"], ["2D", "2C", "2H"], wrap: wrap);
-      final heartRoyal = facing(
-        ["3D", "4D", "5D", "6D", "7D"],
-        ["TH", "JH", "QH", "KH", "AH"],
-        earlier: ["TS", "JS", "QS", "KS", "AS"],
-        wrap: wrap,
-      );
+      final heartRoyal = facing(["3D", "4D", "5D", "6D", "7D"], ["TH", "JH", "QH", "KH", "AH"], wrap: wrap);
+      for (final state in [heart, lowPair, lesserTriple, heartRoyal]) {
+        expect(shouldAutoPass(state, 0, on), isFalse);
+      }
 
-      expect(shouldAutoPass(heart, 0, on), isTrue);
-      expect(shouldAutoPass(heartStillOut, 0, on), isFalse);
-      expect(shouldAutoPass(lowPair, 0, on), isTrue);
-      expect(shouldAutoPass(lowPairLive, 0, on), isFalse);
-      expect(shouldAutoPass(lesserTriple, 0, on), isTrue);
-      expect(shouldAutoPass(heartRoyal, 0, on), isTrue);
-      expect(shouldAutoPass(heart, 0, off), isFalse);
-      expect(shouldAutoPass(lowPair, 0, off), isFalse);
-    });
-
-    test("a skip uses the public count, not the hidden cards ($label)", () {
-      final cannot = facing(["3D", "4D"], ["9C", "9D"], wrap: wrap);
-      final can = facing(["2S", "2H"], ["9C", "9D"], wrap: wrap);
-      expect(shouldAutoPass(cannot, 0, on), isFalse);
-      expect(shouldAutoPass(can, 0, on), isFalse);
-      final deuceOut = facing(["3D", "4D", "5D"], ["2H"], wrap: wrap);
-      expect(shouldAutoPass(deuceOut, 0, on), isFalse);
-    });
-
-    test("cards played on an earlier trick stay face-up ($label)", () {
       var state = makeState(
         hands: [
           parseCards(["2S", "2H", "3D", "4D", "5D"]),
@@ -169,12 +144,20 @@ void main() {
       state = (applyPass(state, 1, on) as StepOk).state;
       state = (applyPass(state, 2, on) as StepOk).state;
       state = (applyPass(state, 3, on) as StepOk).state;
-      expect(state.faceUp, ["2S"]);
-      expect(state.trick, isNull);
       state = (applyPlay(state, 0, ["2H"], on) as StepOk).state;
-      expect(state.faceUp, ["2S", "2H"]);
-      expect(shouldAutoPass(state, state.turn, on), isTrue);
+      expect(state.trickCards, ["2H"]);
+      expect(shouldAutoPass(state, state.turn, on), isFalse);
       expect(shouldAutoPass(state, state.turn, off), isFalse);
     });
+
+    test("a skip uses the public count, not the hidden cards ($label)", () {
+      final cannot = facing(["3D", "4D"], ["9C", "9D"], wrap: wrap);
+      final can = facing(["2S", "2H"], ["9C", "9D"], wrap: wrap);
+      expect(shouldAutoPass(cannot, 0, on), isFalse);
+      expect(shouldAutoPass(can, 0, on), isFalse);
+      final deuceOut = facing(["3D", "4D", "5D"], ["2H"], wrap: wrap);
+      expect(shouldAutoPass(deuceOut, 0, on), isFalse);
+    });
+
   }
 }
