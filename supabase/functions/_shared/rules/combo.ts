@@ -228,3 +228,127 @@ export function neededShape(kind: ComboKind): string {
   if (group === "triple") return "a triple";
   return "a five-card hand";
 }
+
+/** How many cards a play of this shape needs. */
+export function cardsRequired(kind: ComboKind): number {
+  const group = family(kind);
+  if (group === "single") return 1;
+  if (group === "pair") return 2;
+  if (group === "triple") return 3;
+  return 5;
+}
+
+function grouped(cards: readonly Card[], key: (card: Card) => string | number): Map<string | number, Card[]> {
+  const groups = new Map<string | number, Card[]>();
+  for (const card of cards) {
+    const id = key(card);
+    const list = groups.get(id) ?? [];
+    list.push(card);
+    groups.set(id, list);
+  }
+  return groups;
+}
+
+function beatsIf(defense: Combo, cards: readonly Card[], wrap: boolean): boolean {
+  const combo = identify(cards, wrap);
+  return combo !== null && beats(combo, defense);
+}
+
+/** True when [visit] accepts one combination. Stops at the first hit. */
+function anyPick(groups: readonly (readonly Card[])[], visit: (cards: Card[]) => boolean): boolean {
+  const pick: Card[] = [];
+  const walk = (index: number): boolean => {
+    if (index === groups.length) return visit(pick);
+    for (const card of groups[index]) {
+      pick.push(card);
+      if (walk(index + 1)) return true;
+      pick.pop();
+    }
+    return false;
+  };
+  return groups.length > 0 && walk(0);
+}
+
+function anyCount(cards: readonly Card[], count: number, visit: (cards: Card[]) => boolean): boolean {
+  const pick: Card[] = [];
+  const walk = (start: number): boolean => {
+    if (pick.length === count) return visit(pick);
+    for (let index = start; index <= cards.length - (count - pick.length); index++) {
+      pick.push(cards[index]);
+      if (walk(index + 1)) return true;
+      pick.pop();
+    }
+    return false;
+  };
+  return cards.length >= count && walk(0);
+}
+
+/**
+ * True when some cards in [pool] form a combination that beats [defense].
+ * What counts, and which play wins, comes from identify and beats, including
+ * the table's straight rule. The pool is the caller's choice of cards.
+ */
+export function anyBeats(defense: Combo, pool: readonly Card[], wrap: boolean): boolean {
+  const need = cardsRequired(defense.kind);
+  if (pool.length < need) return false;
+  const group = family(defense.kind);
+  if (group === "single") {
+    return pool.some((card) => beatsIf(defense, [card], wrap));
+  }
+  const byRank = grouped(pool, (card) => card.r);
+  if (group === "pair" || group === "triple") {
+    for (const cards of byRank.values()) {
+      if (cards.length < need) continue;
+      if (anyCount(cards, need, (choice) => beatsIf(defense, choice, wrap))) return true;
+    }
+    return false;
+  }
+
+  for (const suited of grouped(pool, (card) => card.s).values()) {
+    if (suited.length < 5) continue;
+    if (anyCount(suited, 5, (cards) => beatsIf(defense, cards, wrap))) return true;
+  }
+
+  for (const cards of byRank.values()) {
+    if (cards.length < 4) continue;
+    const four = cards.slice(0, 4);
+    for (const kicker of pool) {
+      if (kicker.r === four[0].r) continue;
+      if (beatsIf(defense, [...four, kicker], wrap)) return true;
+    }
+  }
+
+  const rankKeys = [...byRank.keys()];
+  for (const tripleRank of rankKeys) {
+    const tripleCards = byRank.get(tripleRank) ?? [];
+    if (tripleCards.length < 3) continue;
+    for (const pairRank of rankKeys) {
+      if (pairRank === tripleRank) continue;
+      const pairCards = byRank.get(pairRank) ?? [];
+      if (pairCards.length < 2) continue;
+      if (anyCount(tripleCards, 3, (triple) => anyCount(pairCards, 2, (pair) => beatsIf(defense, [...triple, ...pair], wrap)))) {
+        return true;
+      }
+    }
+  }
+
+  const ranks = rankKeys.filter((rank) => typeof rank === "number") as number[];
+  const chosen: number[] = [];
+  const walkRanks = (start: number): boolean => {
+    if (chosen.length === 5) {
+      const groups = chosen.map((rank) => byRank.get(rank) ?? []);
+      const probe = identify(groups.map((cards) => cards[0]), wrap);
+      if (!probe || (probe.kind !== "straight" && probe.kind !== "straight_flush" && probe.kind !== "royal_flush")) {
+        return false;
+      }
+      return anyPick(groups, (cards) => beatsIf(defense, cards, wrap));
+    }
+    for (let index = start; index <= ranks.length - (5 - chosen.length); index++) {
+      chosen.push(ranks[index]);
+      if (walkRanks(index + 1)) return true;
+      chosen.pop();
+    }
+    return false;
+  };
+  return ranks.length >= 5 && walkRanks(0);
+}

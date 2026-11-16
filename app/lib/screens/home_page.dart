@@ -179,6 +179,11 @@ class _HomePageState extends State<HomePage> {
               "A spade flush beats a heart flush, and a spade straight flush beats any heart straight flush. You cannot finish on 2s alone. A five-card hand may include a 2. If the next player has one card, a single must be your highest card. Bonuses are added to the other players as soon as they are played.",
               style: TextStyle(color: Colors.white70, height: 1.4),
             ),
+            const SizedBox(height: 8),
+            const Text(
+              "A single 2♠ is always passed for the other players. Autoplay is off unless it is turned on before the deal. With Autoplay on, a player who faces the current play is also passed when any of these is true: they hold fewer cards than the play needs, the play is the best of its kind under the table's rules, or every card that could beat it has already been played face-up. Those skips use only the card counts and the cards already played, so a skip never shows what someone still holds.",
+              style: TextStyle(color: Colors.white70, height: 1.4),
+            ),
           ],
         ),
       ),

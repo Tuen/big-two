@@ -66,6 +66,8 @@ class _PracticePageState extends State<PracticePage> {
   int _sweepGen = 0;
   Timer? _lastCard;
   int _lastCardGen = 0;
+  Timer? _autoplay;
+  int _autoplayGen = 0;
 
   @override
   void initState() {
@@ -83,6 +85,7 @@ class _PracticePageState extends State<PracticePage> {
     _ticker?.cancel();
     _sweep?.cancel();
     _lastCard?.cancel();
+    _autoplay?.cancel();
     for (final controller in _nameControllers) {
       controller.dispose();
     }
@@ -122,6 +125,7 @@ class _PracticePageState extends State<PracticePage> {
     _sweepGen += 1;
     _sweep?.cancel();
     _ticker?.cancel();
+    _cancelAutoplay();
     TableSounds.instance.unlock();
     TableSounds.instance.deal();
   }
@@ -147,6 +151,7 @@ class _PracticePageState extends State<PracticePage> {
     });
     _sweepGen += 1;
     _sweep?.cancel();
+    _cancelAutoplay();
   }
 
   HandState _scene({
@@ -218,6 +223,36 @@ class _PracticePageState extends State<PracticePage> {
     deal();
   }
 
+  void _cancelAutoplay() {
+    _autoplay?.cancel();
+    _autoplay = null;
+    _autoplayGen += 1;
+  }
+
+  /// With Autoplay on, pass a player the public checks skip. The lone 2♠ sweep stays as it is.
+  void _armAutoplay() {
+    if (_autoplay != null) return;
+    final state = _state;
+    final gen = _autoplayGen;
+    if (state == null || _sweeping || state.status != "playing" || !_settings.autoplay) return;
+    if (state.trickCards.length == 1 && state.trickCards.first == "2S") return;
+    if (!shouldAutoPass(state, state.turn, _settings)) return;
+    _autoplay = Timer(const Duration(seconds: 1), () {
+      _autoplay = null;
+      if (!mounted || gen != _autoplayGen) return;
+      final current = _state;
+      if (current == null || _sweeping || current.status != "playing") return;
+      if (!shouldAutoPass(current, current.turn, _settings)) return;
+      final seat = current.turn;
+      final step = applyPass(current, seat, _settings);
+      if (step is! StepOk) return;
+      _stash(current);
+      _remember(seat, "pass", const [], noPlayMessage);
+      TableSounds.instance.pass();
+      _apply(StepOk(step.state, step.result, noPlayMessage));
+    });
+  }
+
   void _reveal() {
     _ticker?.cancel();
     final seconds = _settings.turnTimerSeconds;
@@ -276,6 +311,7 @@ class _PracticePageState extends State<PracticePage> {
     _sweep?.cancel();
     _lastCard?.cancel();
     _ticker?.cancel();
+    _cancelAutoplay();
     setState(() {
       _state = snap.state;
       _order = [...snap.order];
@@ -294,9 +330,11 @@ class _PracticePageState extends State<PracticePage> {
     });
     _armTimer();
     _armLastCard();
+    _armAutoplay();
   }
 
   void _beginSweep(StepOk ok) {
+    _cancelAutoplay();
     _ticker?.cancel();
     final gen = ++_sweepGen;
     setState(() {
@@ -347,6 +385,7 @@ class _PracticePageState extends State<PracticePage> {
     _armPasses();
     _armTimer();
     _armLastCard();
+    _armAutoplay();
   }
 
   void _armLastCard() {
@@ -425,9 +464,11 @@ class _PracticePageState extends State<PracticePage> {
       _order = sortCards(ok.state.hands[ok.state.turn], "rank").map(formatCard).toList();
       _secondsLeft = null;
     });
+    if (ok.state.status == "playing") _armAutoplay();
   }
 
   void _applyTimeout() {
+    _cancelAutoplay();
     final before = _state;
     if (before == null) return;
     final step = applyTimeout(before, _settings);
@@ -458,6 +499,7 @@ class _PracticePageState extends State<PracticePage> {
   void _playSelected() {
     final state = _state;
     if (state == null || _sweeping) return;
+    _cancelAutoplay();
     _lastCard?.cancel();
     _lastCardGen += 1;
     final cards = _selected.toList();
@@ -482,6 +524,7 @@ class _PracticePageState extends State<PracticePage> {
   void _passTurn() {
     final state = _state;
     if (state == null || _sweeping) return;
+    _cancelAutoplay();
     _lastCard?.cancel();
     _lastCardGen += 1;
     final step = applyPass(state, state.turn, _settings);
@@ -522,6 +565,17 @@ class _PracticePageState extends State<PracticePage> {
   bool _passing(int seat) {
     final until = _passUntil[seat];
     return until != null && until.isAfter(DateTime.now());
+  }
+
+  String _passChip(int seat) {
+    if (!_passing(seat)) return "Pass";
+    for (var index = _acts.length - 1; index >= 0; index--) {
+      final act = _acts[index];
+      if (act.seat == seat && act.kind == "pass") {
+        return act.label == noPlayMessage ? "auto-pass" : "Pass";
+      }
+    }
+    return "Pass";
   }
 
   (ShownPlay?, ShownPlay?) _piles(HandState state) {
@@ -682,6 +736,12 @@ class _PracticePageState extends State<PracticePage> {
             onChanged: (value) => setState(() => _settings = _settings.copyWith(passLocks: value)),
           ),
           SwitchListTile(
+            value: _settings.autoplay,
+            title: const Text("Autoplay"),
+            subtitle: const Text("Off until you turn it on. Pass a short hand, a best play, or a play nothing left can beat. A single 2♠ is always passed."),
+            onChanged: (value) => setState(() => _settings = _settings.copyWith(autoplay: value)),
+          ),
+          SwitchListTile(
             value: _settings.straightsWrap,
             title: const Text("Straight wrap"),
             subtitle: const Text("Saved for this game. A straight still cannot pass the 2."),
@@ -770,6 +830,10 @@ class _PracticePageState extends State<PracticePage> {
                 const Text("Pass the phone to", style: TextStyle(fontSize: 24)),
                 const SizedBox(height: 8),
                 Text(_names[state.turn], textAlign: TextAlign.center, style: const TextStyle(fontSize: 48, fontWeight: FontWeight.w800)),
+                if (_banner == noPlayMessage) ...[
+                  const SizedBox(height: 16),
+                  const Text("No play – auto pass", textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                ],
                 const SizedBox(height: 24),
                 FilledButton(onPressed: _reveal, child: const Text("Show my cards")),
                 if (_undo != null) ...[
@@ -844,6 +908,7 @@ class _PracticePageState extends State<PracticePage> {
       total: state.running[seat],
       turn: state.turn == seat,
       passing: _passing(seat),
+      passChip: _passChip(seat),
     );
   }
 

@@ -12,6 +12,7 @@ class SeatSpot {
   final bool turn;
   final bool connected;
   final bool passing;
+  final String passChip;
   final String? detail;
   const SeatSpot({
     required this.name,
@@ -20,6 +21,7 @@ class SeatSpot {
     required this.turn,
     this.connected = true,
     this.passing = false,
+    this.passChip = "Pass",
     this.detail,
   });
 }
@@ -581,7 +583,7 @@ class _TableViewState extends State<TableView> with TickerProviderStateMixin {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
-                child: const Text("Pass", style: TextStyle(color: ink, fontWeight: FontWeight.w800, fontSize: 12)),
+                child: Text(seat.passChip, style: const TextStyle(color: ink, fontWeight: FontWeight.w800, fontSize: 12)),
               ),
             ),
         ],
