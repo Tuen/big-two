@@ -216,3 +216,132 @@ String neededShape(ComboKind kind) {
       return "a five-card hand";
   }
 }
+
+/// How many cards a play of this shape needs.
+int cardsRequired(ComboKind kind) {
+  switch (family(kind)) {
+    case "single":
+      return 1;
+    case "pair":
+      return 2;
+    case "triple":
+      return 3;
+    default:
+      return 5;
+  }
+}
+
+bool _beatsIf(Combo defense, List<PlayingCard> cards, bool wrap) {
+  final combo = identify(cards, wrap: wrap);
+  return combo != null && beats(combo, defense);
+}
+
+bool _anyPick(List<List<PlayingCard>> groups, bool Function(List<PlayingCard> cards) visit) {
+  final pick = <PlayingCard>[];
+  bool walk(int index) {
+    if (index == groups.length) return visit(pick);
+    for (final card in groups[index]) {
+      pick.add(card);
+      if (walk(index + 1)) return true;
+      pick.removeLast();
+    }
+    return false;
+  }
+
+  return groups.isNotEmpty && walk(0);
+}
+
+bool _anyCount(List<PlayingCard> cards, int count, bool Function(List<PlayingCard> cards) visit) {
+  final pick = <PlayingCard>[];
+  bool walk(int start) {
+    if (pick.length == count) return visit(pick);
+    for (var index = start; index <= cards.length - (count - pick.length); index++) {
+      pick.add(cards[index]);
+      if (walk(index + 1)) return true;
+      pick.removeLast();
+    }
+    return false;
+  }
+
+  return cards.length >= count && walk(0);
+}
+
+/// True when some cards in [pool] form a combination that beats [defense].
+/// What counts, and which play wins, comes from [identify] and [beats].
+bool anyBeats(Combo defense, List<PlayingCard> pool, bool wrap) {
+  final need = cardsRequired(defense.kind);
+  if (pool.length < need) return false;
+  final group = family(defense.kind);
+  if (group == "single") {
+    return pool.any((card) => _beatsIf(defense, [card], wrap));
+  }
+  final byRank = <int, List<PlayingCard>>{};
+  for (final card in pool) {
+    byRank.putIfAbsent(card.rank, () => []).add(card);
+  }
+  if (group == "pair" || group == "triple") {
+    for (final cards in byRank.values) {
+      if (cards.length < need) continue;
+      if (_anyCount(cards, need, (choice) => _beatsIf(defense, choice, wrap))) return true;
+    }
+    return false;
+  }
+
+  final bySuit = <Suit, List<PlayingCard>>{};
+  for (final card in pool) {
+    bySuit.putIfAbsent(card.suit, () => []).add(card);
+  }
+  for (final suited in bySuit.values) {
+    if (suited.length < 5) continue;
+    if (_anyCount(suited, 5, (cards) => _beatsIf(defense, cards, wrap))) return true;
+  }
+
+  for (final cards in byRank.values) {
+    if (cards.length < 4) continue;
+    final four = cards.sublist(0, 4);
+    for (final kicker in pool) {
+      if (kicker.rank == four.first.rank) continue;
+      if (_beatsIf(defense, [...four, kicker], wrap)) return true;
+    }
+  }
+
+  final rankKeys = byRank.keys.toList();
+  for (final tripleRank in rankKeys) {
+    final tripleCards = byRank[tripleRank] ?? [];
+    if (tripleCards.length < 3) continue;
+    for (final pairRank in rankKeys) {
+      if (pairRank == tripleRank) continue;
+      final pairCards = byRank[pairRank] ?? [];
+      if (pairCards.length < 2) continue;
+      final found = _anyCount(
+        tripleCards,
+        3,
+        (triple) => _anyCount(pairCards, 2, (pair) => _beatsIf(defense, [...triple, ...pair], wrap)),
+      );
+      if (found) return true;
+    }
+  }
+
+  final chosen = <int>[];
+  bool walkRanks(int start) {
+    if (chosen.length == 5) {
+      final groups = [for (final rank in chosen) byRank[rank] ?? []];
+      final probe = identify([for (final cards in groups) cards.first], wrap: wrap);
+      if (probe == null ||
+          (probe.kind != ComboKind.straight &&
+              probe.kind != ComboKind.straightFlush &&
+              probe.kind != ComboKind.royalFlush)) {
+        return false;
+      }
+      return _anyPick(groups, (cards) => _beatsIf(defense, cards, wrap));
+    }
+    for (var index = start; index <= rankKeys.length - (5 - chosen.length); index++) {
+      chosen.add(rankKeys[index]);
+      if (walkRanks(index + 1)) return true;
+      chosen.removeLast();
+    }
+    return false;
+  }
+
+  return rankKeys.length >= 5 && walkRanks(0);
+}

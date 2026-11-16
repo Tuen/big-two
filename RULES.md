@@ -91,7 +91,17 @@ Undo puts back only your own last play or pass, and only before the next player 
 
 ## The 2 of spades
 
-A single 2 of spades cannot be beaten. About a second later the other three pass on their own, the lead comes back to the player who played it, and the table says "2♠ – everyone passes". That is the only automatic pass. A single ace, a pair, or a five-card hand is not passed for you, even when you have no legal play: you press Pass, or the turn timer does if one is on. A pair or a five-card hand that merely contains the 2 of spades is not passed automatically.
+A single 2 of spades cannot be beaten. About a second later the other three pass on their own, the lead comes back to the player who played it, and the table says "2♠ – everyone passes". That automatic pass always applies. A pair or a five-card hand that merely contains the 2 of spades is not passed for that reason.
+
+Autoplay is a table option, off unless the host turns it on before the deal. With it off, a single ace, a pair, or a five-card hand is not passed for you, even when you have no legal play: you press Pass, or the turn timer does if one is on.
+
+With Autoplay on, a player who faces the current play is also passed when any of these is true:
+
+1. They hold fewer cards than the play needs. A five-card play needs 5, a triple needs 3, and a pair needs 2.
+2. The play is the best of its kind under the rules this table is using. That includes a pair of 2s that contains the highest-suit 2, a triple of 2s that nothing of that shape can beat, and the top five-card hand.
+3. Nothing still unplayed can beat it. Only cards already played face-up are counted as gone. For example, the 2♥ once the 2♠ has been played, or the pair 2♣ 2♦ once the 2♠ and the 2♥ are gone.
+
+The skip uses the card count and the cards already played. It does not look at the hidden cards, so a skip never shows what a player holds. Suit order, which straights count, five-card order, and what beats what all follow the selected rules. A leader is not passed by Autoplay. The table shows "No play – auto pass" for these skips.
 
 ## Leading
 

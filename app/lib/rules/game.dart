@@ -11,6 +11,8 @@ class Settings {
   final int season;
   final String timezone;
   final int firstRoundNumber;
+  /// When on, also pass a player who cannot answer the current play for a public reason.
+  final bool autoplay;
   const Settings({
     required this.passLocks,
     required this.straightsWrap,
@@ -18,6 +20,7 @@ class Settings {
     required this.season,
     required this.timezone,
     required this.firstRoundNumber,
+    required this.autoplay,
   });
 
   Settings copyWith({
@@ -27,6 +30,7 @@ class Settings {
     int? season,
     String? timezone,
     int? firstRoundNumber,
+    bool? autoplay,
   }) {
     return Settings(
       passLocks: passLocks ?? this.passLocks,
@@ -35,6 +39,7 @@ class Settings {
       season: season ?? this.season,
       timezone: timezone ?? this.timezone,
       firstRoundNumber: firstRoundNumber ?? this.firstRoundNumber,
+      autoplay: autoplay ?? this.autoplay,
     );
   }
 }
@@ -46,6 +51,7 @@ const defaultSettings = Settings(
   season: 24,
   timezone: "Australia/Melbourne",
   firstRoundNumber: 1,
+  autoplay: false,
 );
 
 class HandState {
@@ -64,6 +70,8 @@ class HandState {
   final int? winner;
   final int leadSkips;
   final String? closedReason;
+  /// Cards already played face-up this hand, including the current trick.
+  final List<String> faceUp;
 
   const HandState({
     required this.hands,
@@ -81,6 +89,7 @@ class HandState {
     required this.winner,
     required this.leadSkips,
     required this.closedReason,
+    this.faceUp = const [],
   });
 }
 
@@ -162,6 +171,7 @@ HandState makeState({
   List<String>? trickCards,
   int consecutivePasses = 0,
   List<int>? locked,
+  List<String>? faceUp,
 }) {
   final totals = running ?? [0, 0, 0, 0];
   return HandState(
@@ -180,6 +190,7 @@ HandState makeState({
     winner: null,
     leadSkips: 0,
     closedReason: null,
+    faceUp: [...(faceUp ?? trickCards ?? const <String>[])],
   );
 }
 
@@ -304,14 +315,27 @@ String? automaticLastCard(HandState state, int seat, Settings settings) {
 const noPlayMessage = "No play – auto pass";
 const onlyTwosLeadNote = "Only 2s left – can't go out, please pass";
 
-/// True only when this seat must beat a single 2 of spades.
-/// Any other trick, including one they cannot beat, waits for their Pass.
-/// A new lead is never an auto-pass.
+/// Cards still unplayed: the deck, minus cards already played face-up.
+List<PlayingCard> _cardsStillOut(HandState state) {
+  final gone = {...state.faceUp, ...state.trickCards};
+  return [for (final card in fullDeck()) if (!gone.contains(formatCard(card))) card];
+}
+
+/// True when this seat is passed for them.
+/// A lone 2 of spades is always passed. With Autoplay on, a player facing
+/// the current play is also passed when a public check says they cannot
+/// answer it. That check uses the card count and the cards already played.
+/// It does not look at anyone's hidden cards. A new lead is never an auto-pass.
 bool shouldAutoPass(HandState state, int seat, Settings settings) {
   if (state.status != "playing" || state.turn != seat) return false;
-  if (state.trickCards.length != 1 || state.trickCards.first != "2S") return false;
+  final trick = state.trick;
+  if (trick == null) return false;
+  if (legalSelections(state, seat, settings).isNotEmpty) return false;
   if (passIssue(state, seat, settings) != null) return false;
-  return legalSelections(state, seat, settings).isEmpty;
+  if (state.trickCards.length == 1 && state.trickCards.first == "2S") return true;
+  if (!settings.autoplay) return false;
+  if (state.hands[seat].length < cardsRequired(trick.kind)) return true;
+  return !anyBeats(trick, _cardsStillOut(state), settings.straightsWrap);
 }
 
 /// Leading, every card left is a 2, and none of them can be played.
@@ -366,6 +390,7 @@ HandState _withBonus(HandState state, int seat, Combo combo) {
     winner: state.winner,
     leadSkips: state.leadSkips,
     closedReason: state.closedReason,
+    faceUp: state.faceUp,
   );
 }
 
@@ -388,6 +413,7 @@ HandState _copy(HandState state, {
   int? leadSkips,
   String? closedReason,
   bool clearClosed = false,
+  List<String>? faceUp,
 }) {
   return HandState(
     hands: hands ?? state.hands,
@@ -405,6 +431,7 @@ HandState _copy(HandState state, {
     winner: clearWinner ? null : (winner ?? state.winner),
     leadSkips: leadSkips ?? state.leadSkips,
     closedReason: clearClosed ? null : (closedReason ?? state.closedReason),
+    faceUp: faceUp ?? state.faceUp,
   );
 }
 
@@ -429,6 +456,7 @@ Step applyPlay(HandState state, int seat, List<String> cardIds, Settings setting
       trick: combo,
       trickSeat: seat,
       trickCards: cards.map(formatCard).toList(),
+      faceUp: [...state.faceUp, ...cards.map(formatCard)],
       consecutivePasses: 0,
       firstLead: false,
       leadSkips: 0,

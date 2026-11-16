@@ -161,6 +161,7 @@ function cleanSettings(value: unknown, fallback: Settings = DEFAULT_SETTINGS): S
     firstRoundNumber: Number.isInteger(firstRound) && firstRound >= 1 && firstRound <= 999
       ? firstRound
       : fallback.firstRoundNumber,
+    autoplay: Boolean(raw.autoplay ?? fallback.autoplay),
   };
 }
 
@@ -196,10 +197,10 @@ function playerName(seats: Row[], seat: number): string {
 }
 
 /**
- * Auto-pass is on at every table.
- * It passes a player only when the card to beat is the single 2 of spades.
- * Any other pass, including no legal play, is the player's own button,
- * or the turn timer when one is on.
+ * The table may pass a seat without a tap.
+ * A lone 2 of spades is always passed. Any other automatic pass happens
+ * only when that table's Autoplay setting is on, and only for a public reason.
+ * Every remaining pass is the player's own button, or the turn timer when one is on.
  */
 function passesAutomatically(table: Row, _seats: Row[]): boolean {
   if (!rulesV14(table)) return false;
@@ -847,6 +848,7 @@ export async function buildView(
       : null,
     consecutivePasses: state.consecutivePasses,
     locked: state.locked,
+    played: state.faceUp,
     running: score ? score.runningTotals : state.running,
     commitment: hand.commitment,
     deckReveal: hand.deck_reveal,

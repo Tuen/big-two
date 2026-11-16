@@ -1,5 +1,5 @@
-import { type Card, formatCard, highestCard, parseCards, removeCards, sameCard } from "./cards.ts";
-import { beats, type Combo, family, identify, neededShape } from "./combo.ts";
+import { type Card, formatCard, fullDeck, highestCard, parseCards, removeCards, sameCard } from "./cards.ts";
+import { anyBeats, beats, cardsRequired, type Combo, family, identify, neededShape } from "./combo.ts";
 import { type Bonus, type HandScore, scoreCounts } from "./score.ts";
 import { isLoneTwoOfSpades } from "../undo.ts";
 
@@ -12,6 +12,11 @@ export interface Settings {
   timezone: string;
   /** Number used for the first round at this table. Later rounds add 1. */
   firstRoundNumber: number;
+  /**
+   * When on, also pass a player who cannot answer the current play for a
+   * public reason. Off leaves passes as they are, apart from the lone 2 of spades.
+   */
+  autoplay: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -21,6 +26,7 @@ export const DEFAULT_SETTINGS: Settings = {
   season: 24,
   timezone: "Australia/Melbourne",
   firstRoundNumber: 1,
+  autoplay: false,
 };
 
 export interface HandState {
@@ -41,6 +47,8 @@ export interface HandState {
   winner: number | null;
   leadSkips: number;
   closedReason: "winner" | "stuck" | null;
+  /** Cards already played face-up this hand, including the current trick. */
+  faceUp: string[];
 }
 
 export interface HandResult extends HandScore {
@@ -114,6 +122,7 @@ export function cloneState(state: HandState): HandState {
     winner: state.winner,
     leadSkips: state.leadSkips,
     closedReason: state.closedReason,
+    faceUp: [...state.faceUp],
   };
 }
 
@@ -156,6 +165,7 @@ export function startHand(
     winner: null,
     leadSkips: 0,
     closedReason: null,
+    faceUp: [],
   };
 }
 
@@ -170,6 +180,8 @@ export function makeState(args: {
   trickCards?: string[];
   consecutivePasses?: number;
   locked?: number[];
+  /** Cards already played face-up. Defaults to the current trick. */
+  faceUp?: string[];
 }): HandState {
   const running = args.running ?? [0, 0, 0, 0];
   return {
@@ -188,6 +200,7 @@ export function makeState(args: {
     winner: null,
     leadSkips: 0,
     closedReason: null,
+    faceUp: [...(args.faceUp ?? args.trickCards ?? [])],
   };
 }
 
@@ -296,27 +309,45 @@ export function automaticLastCard(state: HandState, seat: number, settings: Sett
 }
 
 /**
- * True only when this seat must beat a single 2 of spades.
- * Nothing beats that card, so the table passes for them.
- * Any other trick, including a single they cannot beat, is their own Pass.
+ * True when this seat is passed for them.
+ * A lone 2 of spades is always passed: nothing beats it.
+ * With Autoplay on, a player facing the current play is also passed when a
+ * public check says they cannot answer it. The check uses the card count and
+ * the cards already played face-up. It does not look at anyone's hidden cards.
  * Never true on a new lead, even when the only cards are 2s. That leader taps Pass.
  */
 export function shouldAutoPass(state: HandState, seat: number, settings: Settings): boolean {
   return autoPassBlock(state, seat, settings) === null;
 }
 
+/** Cards still unplayed: the deck, minus cards already played face-up. */
+function cardsStillOut(state: HandState): Card[] {
+  const gone = new Set(state.faceUp);
+  for (const id of state.trickCards) gone.add(id);
+  return fullDeck().filter((card) => !gone.has(formatCard(card)));
+}
+
 /**
- * Why this seat must not be auto-passed. Null means it is still their turn
- * and the card they must beat is the single 2 of spades.
+ * Why this seat must not be auto-passed. Null means pass them.
+ * A lone 2 of spades is passed whether or not Autoplay is on.
+ * Autoplay can also pass for a short count, a best-possible play, or a play
+ * that nothing left unplayed can beat.
  */
 export function autoPassBlock(state: HandState, seat: number, settings: Settings): string | null {
   if (state.status !== "playing") return "the hand is over";
   if (state.turn !== seat) return "it is no longer their turn";
-  if (state.trick === null) return "they are leading";
+  const trick = state.trick;
+  if (trick === null) return "they are leading";
   if (legalSelections(state, seat, settings).length > 0) return "they can beat what is on the table";
-  if (!isLoneTwoOfSpades(state.trickCards)) return "only the 2 of spades is auto-passed";
+  if (isLoneTwoOfSpades(state.trickCards)) {
+    if (passIssue(state, seat, settings) !== null) return "a pass is not allowed";
+    return null;
+  }
+  if (settings.autoplay !== true) return "only the 2 of spades is auto-passed";
   if (passIssue(state, seat, settings) !== null) return "a pass is not allowed";
-  return null;
+  if (state.hands[seat].length < cardsRequired(trick.kind)) return null;
+  if (!anyBeats(trick, cardsStillOut(state), settings.straightsWrap)) return null;
+  return "only the 2 of spades is auto-passed";
 }
 
 /** A turn timer may pass only the seat whose clock ran out. */
@@ -355,8 +386,9 @@ export type ServerAutomatic =
 
 /**
  * What the server may do without a phone asking.
- * A last card is played. The other players are passed only when the card
- * to beat is the single 2 of spades. Every other pass is the player's own.
+ * A last card is played. The other players are passed when the card to beat
+ * is the single 2 of spades. With Autoplay on, the public skip rules pass
+ * them too. Every other pass is the player's own.
  * A leader, including one who only has 2s, is left alone.
  */
 export function serverAutomatic(state: HandState, settings: Settings): ServerAutomatic | null {
@@ -421,6 +453,7 @@ export function applyPlay(state: HandState, seat: number, cardIds: readonly stri
       trick: combo,
       trickSeat: seat,
       trickCards: cards.map(formatCard),
+      faceUp: [...state.faceUp, ...cards.map(formatCard)],
       consecutivePasses: 0,
       firstLead: false,
       leadSkips: 0,

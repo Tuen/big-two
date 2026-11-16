@@ -78,6 +78,7 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
   RealtimeChannel? _channel;
   final ActionReel _reel = ActionReel();
   final Map<int, DateTime> _passUntil = {};
+  final Map<int, String> _passChip = {};
   bool _dwelling = false;
   int? _actor;
   int _playToken = 0;
@@ -575,6 +576,7 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
     _actor = action.seat;
     if (action.kind == "pass") {
       _passUntil[action.seat] = DateTime.now().add(const Duration(milliseconds: 1500));
+      _passChip[action.seat] = action.label == noPlayMessage ? "auto-pass" : "Pass";
       TableSounds.instance.pass();
       Timer(const Duration(milliseconds: 1500), () {
         if (mounted) setState(() {});
@@ -681,6 +683,7 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
         "season": settings.season,
         "timezone": settings.timezone,
         "firstRoundNumber": settings.firstRoundNumber,
+        "autoplay": settings.autoplay,
         "v13": true,
         if (const bool.fromEnvironment("TEST_PREVIEW")) "v14": true,
       };
@@ -706,6 +709,7 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
       trickSeat: view.trick?.seat,
       trickCards: trickCards,
       locked: view.locked,
+      faceUp: view.played,
     );
   }
 
@@ -823,6 +827,12 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
               value: view.settings.passLocks,
               title: const Text("Passing locks you out for the rest of the trick"),
               onChanged: (value) => _saveSettings(view, view.settings.copyWith(passLocks: value)),
+            ),
+            SwitchListTile(
+              value: view.settings.autoplay,
+              title: const Text("Autoplay"),
+              subtitle: const Text("Off until you turn it on. Pass a short hand, a best play, or a play nothing left can beat. A single 2♠ is always passed."),
+              onChanged: (value) => _saveSettings(view, view.settings.copyWith(autoplay: value)),
             ),
             SwitchListTile(
               value: view.settings.straightsWrap,
@@ -1188,6 +1198,7 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
       turn: turn,
       connected: view.seats[seat].connected,
       passing: _passing(seat),
+      passChip: _passChip[seat] ?? "Pass",
       detail: _standInDetail(view.seats[seat]),
     );
   }

@@ -43,6 +43,8 @@ void main() {
   test("an older snapshot without recent still parses", () {
     final view = TableSnapshot.fromJson(_view());
     expect(view.recent, isEmpty);
+    expect(view.played, isEmpty);
+    expect(view.settings.autoplay, isFalse);
     expect(view.trick?.cards, ["3D"]);
     expect(view.yourCards, ["AS", "KH"]);
     expect(view.watchers, isEmpty);

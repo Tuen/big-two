@@ -11,6 +11,7 @@ const settings = {
   season: 24,
   timezone: "Australia/Melbourne",
   firstRoundNumber: 1,
+  autoplay: false,
 };
 
 test("two approvals undo, two refusals or a timeout do not", () => {

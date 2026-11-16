@@ -129,6 +129,7 @@ Any seated player can deal, deal the next hand, or start a new round. Only the h
 Settings, with the defaults:
 
 - Passing does not lock you for the rest of the trick.
+- Autoplay off. The lone 2 of spades is still passed for the other players.
 - Straights run from 3-4-5-6-7 up to J-Q-K-A-2. They never wrap past the 2. The wrap switch is stored, and it cannot make A-2-3-4-5 or 2-3-4-5-6 legal.
 - Turn timer off. The choices are off, 15, 30, 45, and 60 seconds.
 - Season 24. The host can change it in the lobby.
@@ -143,7 +144,7 @@ If the table already has four players, **Join** offers **Watch this game**. A vi
 
 **Chat** is for that table. Players and viewers can both use it. A viewer's name is marked as a viewer. A message is at most 200 characters. Hide the chat so it does not cover the cards; a small badge shows new messages while it is hidden. The chat clears when the round ends.
 
-Auto-pass happens only when the card to beat is the single 2 of spades. Nothing beats it, so the other three pass on their own. Any other time, including when a player has no legal play, that player presses Pass. The turn timer, if one is on, still passes for them when it runs out. A pair, three of a kind, or a five-card hand is never auto-passed. A leader who can only play 2s still presses Pass. A computer player in that seat still passes after about a second.
+Auto-pass happens when the card to beat is the single 2 of spades. Nothing beats it, so the other three pass on their own. That pass always applies. Autoplay is off unless the host turns it on before the deal. With it on, a player facing the current play is also passed when they hold fewer cards than the play needs, when the play is the best of its kind, or when every card that could beat it has already been played. Those checks use card counts and the cards already played, not the hidden hands. With Autoplay off, any other time, including when a player has no legal play, that player presses Pass. The turn timer, if one is on, still passes for them when it runs out. A leader who can only play 2s still presses Pass. A computer player in that seat still passes after about a second.
 
 The host can also fill an empty seat with a computer player: Easy, Normal, or Hard. Normal is the default. The seat is named Bot Ruby, Bot Jade, Bot Pearl, or Bot Amber, and the table shows a robot badge. One to three humans can play with the rest filled by bots, including one human and three bots. Bots are seated players on the server. They use the same rules, see only their own cards, the cards played so far, and the other players' counts, and they take about a second to move. A later tick finishes a bot turn if the previous request stopped. A hand with any bot is still scored normally. The scoreboard says **Practice (computer players)**. Play on this device does not add bots and does not POST the webhook.
 
