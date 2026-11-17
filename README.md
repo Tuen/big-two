@@ -6,7 +6,7 @@ The playable page is [https://tuen.github.io/big-two/](https://tuen.github.io/bi
 
 You can also pass one phone around the table. **Play on this device** uses the same rules and does not send scores anywhere. The score webhook runs on the server, once, after a real online game finishes.
 
-The house rules are in [RULES.md](RULES.md).
+The house rules are in [RULES.md](RULES.md). Card faces are original drawings, public domain under CC0. See [CARD_ART_LICENSE.md](CARD_ART_LICENSE.md).
 
 ## Folder layout
 

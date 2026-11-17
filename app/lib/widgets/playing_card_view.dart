@@ -1,5 +1,8 @@
+import "dart:math" as math;
+
 import "package:big_two/rules/cards.dart";
 import "package:big_two/theme.dart";
+import "package:big_two/widgets/card_art.dart";
 import "package:flutter/material.dart";
 
 class PlayingCardView extends StatelessWidget {
@@ -54,57 +57,53 @@ class PlayingCardView extends StatelessWidget {
   }
 
   Widget _face(BuildContext context, PlayingCard face) {
-    final red = face.suit == Suit.hearts || face.suit == Suit.diamonds;
-    final color = red ? cardRed : ink;
-    final suit = switch (face.suit) {
-      Suit.diamonds => "♦",
-      Suit.clubs => "♣",
-      Suit.hearts => "♥",
-      Suit.spades => "♠",
-    };
-    final rank = rankName(face.rank);
     return MediaQuery(
       data: MediaQuery.of(context).copyWith(textScaler: TextScaler.noScaling),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(5, 3, 5, 3),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final corner = constraints.maxHeight * 0.2;
-            final small = constraints.maxHeight * 0.15;
-            Widget mark(String text, double size, Alignment alignment) {
-              return SizedBox(
-                height: size,
-                width: double.infinity,
-                child: FittedBox(
-                  alignment: alignment,
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    text,
-                    style: TextStyle(color: color, fontSize: size, fontWeight: FontWeight.w800, height: 1),
-                  ),
-                ),
-              );
-            }
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                mark(rank, corner, Alignment.centerLeft),
-                mark(suit, small, Alignment.centerLeft),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: FittedBox(
-                      child: Text(suit, style: TextStyle(color: color, fontSize: 48, height: 1)),
-                    ),
-                  ),
-                ),
-                mark(rank, corner, Alignment.centerRight),
-              ],
-            );
-          },
-        ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cornerW = constraints.maxWidth * 0.30;
+          final cornerH = constraints.maxHeight * 0.28;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(constraints.maxWidth * 0.08, cornerH * 0.85, constraints.maxWidth * 0.08, cornerH * 0.85),
+                child: isCourt(face.rank) ? CourtFace(card: face) : _pips(face),
+              ),
+              Positioned(left: 3, top: 2, width: cornerW, height: cornerH, child: CornerIndex(card: face)),
+              Positioned(
+                right: 3,
+                bottom: 2,
+                width: cornerW,
+                height: cornerH,
+                child: Transform.rotate(angle: math.pi, child: CornerIndex(card: face)),
+              ),
+            ],
+          );
+        },
       ),
+    );
+  }
+
+  Widget _pips(PlayingCard face) {
+    final spots = pipSpots(face.rank);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final pip = constraints.maxHeight / (spots.length <= 3 ? 3.2 : 5.4);
+        return Stack(
+          children: [
+            for (final spot in spots)
+              Align(
+                alignment: Alignment((spot.x - 0.5) * 2, (spot.y - 0.5) * 2),
+                child: SizedBox(
+                  width: pip,
+                  height: pip,
+                  child: PipMark(suit: face.suit, invert: spot.invert),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
