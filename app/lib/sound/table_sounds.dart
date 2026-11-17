@@ -22,6 +22,14 @@ class TableSounds {
   void pass() => _play(impl.playPass);
   void yourTurn() => _play(impl.playYourTurn);
   void handOver({required bool roundOver}) => _play(() => impl.playHandOver(roundOver));
+  void winFlourish() => _play(impl.playWinFlourish);
+  void stopWinFlourish() {
+    try {
+      impl.stopWinFlourish();
+    } catch (_) {
+      // Stopping a sound that never started is fine.
+    }
+  }
 
   void _play(void Function() fn) {
     if (!enabled || !_unlocked) return;

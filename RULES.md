@@ -152,4 +152,4 @@ The worked example, which the tests check: start the hand at 20, 30, 38, 45. Dam
 
 ## Card faces
 
-The card faces are original drawings painted in the app. Number cards use one pip per spot, in the usual layout. Jack, queen, and king are simple figures. The drawings are CC0 1.0 (public domain). Details are in [CARD_ART_LICENSE.md](CARD_ART_LICENSE.md). Card backs are the plain blue pattern.
+Ace to 10 show one suit in the centre. Jack, queen, and king are original two-way figures, the same drawings as the Android app, public domain under CC0 1.0. Details and the flourish sounds are in [CARD_ART_LICENSE.md](CARD_ART_LICENSE.md). Card backs are the plain blue pattern.

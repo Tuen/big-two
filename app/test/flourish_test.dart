@@ -25,6 +25,8 @@ void main() {
     await tester.tap(find.byKey(const Key("win-flourish")));
     await tester.pump();
     expect(done, 1);
+    await tester.pump(const Duration(seconds: 3));
+    expect(done, 1);
 
     await tester.pumpWidget(
       MaterialApp(
@@ -37,6 +39,21 @@ void main() {
     await tester.pump();
     expect(find.text("Ada wins!"), findsOneWidget);
     expect(find.byKey(const Key("confetti")), findsNothing);
+  });
+
+  testWidgets("the flourish stays up for about three seconds", (tester) async {
+    var done = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: WinFlourish(name: "Ada", cards: [parseCard("AS")], onDone: () => done++),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 2900));
+    expect(done, 0);
+    expect(find.text("Ada wins!"), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump();
+    expect(done, 1);
   });
 
   test("replaying the saved plays, including a timeout, rebuilds the leftovers", () {

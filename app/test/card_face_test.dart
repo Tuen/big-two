@@ -1,38 +1,44 @@
 import "package:big_two/rules/cards.dart";
-import "package:big_two/widgets/card_art.dart";
+import "package:big_two/widgets/card_face.dart";
 import "package:big_two/widgets/playing_card_view.dart";
 import "package:flutter/material.dart";
 import "package:flutter_test/flutter_test.dart";
 
 void main() {
-  test("ace to 10 use the usual number of pips, and courts have none", () {
-    expect(pipSpots(14), hasLength(1));
-    expect(pipSpots(15), hasLength(2));
+  test("only jack, queen, and king are court cards", () {
     for (var rank = 3; rank <= 10; rank++) {
-      expect(pipSpots(rank), hasLength(rank), reason: "rank $rank");
+      expect(isCourtRank(rank), isFalse, reason: "rank $rank");
     }
-    final seven = pipSpots(7);
-    expect(seven.where((spot) => spot.invert), hasLength(2));
-    expect(seven.where((spot) => !spot.invert && spot.x == 0.5), hasLength(1));
-    expect(pipSpots(11), isEmpty);
-    expect(pipSpots(12), isEmpty);
-    expect(pipSpots(13), isEmpty);
+    expect(isCourtRank(14), isFalse);
+    expect(isCourtRank(15), isFalse);
+    expect(isCourtRank(11), isTrue);
+    expect(isCourtRank(12), isTrue);
+    expect(isCourtRank(13), isTrue);
   });
 
-  testWidgets("7 of hearts, 10 of spades, and the courts show indices", (tester) async {
-    Future<void> show(String id, int pips) async {
-      await tester.pumpWidget(MaterialApp(home: Center(child: PlayingCardView(card: parseCard(id), width: 96))));
-      expect(find.byType(PipMark), findsNWidgets(pips));
-      expect(find.text(rankName(parseCard(id).rank)), findsNWidgets(2));
-      expect(tester.takeException(), isNull);
-    }
+  testWidgets("ace to 10 keep one suit, and courts use the Android painter", (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              PlayingCardView(card: parseCard("TS"), width: 96),
+              PlayingCardView(card: parseCard("JS"), width: 96),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(find.text("10"), findsNWidgets(2));
+    expect(find.text("♠"), findsNWidgets(2));
+    expect(find.byWidgetPredicate((widget) => widget is CustomPaint && widget.painter is CardFacePainter), findsOneWidget);
+    expect(tester.takeException(), isNull);
 
-    await show("7H", 7);
-    await show("TS", 10);
-    await show("JH", 0);
-    await show("QD", 0);
-    await show("KS", 0);
-    expect(find.byType(CourtFace), findsOneWidget);
+    await tester.pumpWidget(MaterialApp(home: Center(child: PlayingCardView(card: parseCard("7H"), width: 96))));
+    expect(find.byWidgetPredicate((widget) => widget is CustomPaint && widget.painter is CardFacePainter), findsNothing);
+    expect(find.text("7"), findsNWidgets(2));
+    expect(find.text("♥"), findsNWidgets(2));
   });
 
   testWidgets("a small card and a 13-card fan do not overflow", (tester) async {
@@ -70,6 +76,6 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(find.text("10"), findsNWidgets(2));
-    expect(find.text("K"), findsNWidgets(2));
+    expect(find.byWidgetPredicate((widget) => widget is CustomPaint && widget.painter is CardFacePainter), findsNWidgets(3));
   });
 }

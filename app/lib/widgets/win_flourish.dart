@@ -1,6 +1,7 @@
 import "dart:math" as math;
 
 import "package:big_two/rules/cards.dart";
+import "package:big_two/sound/table_sounds.dart";
 import "package:big_two/theme.dart";
 import "package:big_two/widgets/playing_card_view.dart";
 import "package:flutter/material.dart";
@@ -26,7 +27,8 @@ class _WinFlourishState extends State<WinFlourish> with SingleTickerProviderStat
     super.initState();
     final random = math.Random(7);
     _bits = [for (var i = 0; i < 36; i++) _Bit(random)];
-    _motion = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..forward();
+    _motion = AnimationController(vsync: this, duration: const Duration(milliseconds: 3000))..forward();
+    TableSounds.instance.winFlourish();
     _motion.addStatusListener((status) {
       if (status == AnimationStatus.completed) _finish();
     });
@@ -34,6 +36,7 @@ class _WinFlourishState extends State<WinFlourish> with SingleTickerProviderStat
 
   @override
   void dispose() {
+    TableSounds.instance.stopWinFlourish();
     _motion.dispose();
     super.dispose();
   }
@@ -41,6 +44,7 @@ class _WinFlourishState extends State<WinFlourish> with SingleTickerProviderStat
   void _finish() {
     if (_closed) return;
     _closed = true;
+    TableSounds.instance.stopWinFlourish();
     widget.onDone();
   }
 
