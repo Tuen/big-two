@@ -1,6 +1,8 @@
 import "dart:js_interop";
 import "dart:js_interop_unsafe";
 
+import "package:flutter/services.dart";
+
 JSObject? _ctx;
 
 void unlockAudio() {
@@ -45,6 +47,61 @@ void playPass() {
 void playYourTurn() {
   _tone(660, 0, 0.09, 0.14, "sine");
   _tone(880, 0.1, 0.14, 0.16, "sine");
+}
+
+int _flourishGen = 0;
+final List<JSObject> _flourishSources = [];
+
+void playWinFlourish() {
+  final gen = ++_flourishGen;
+  _stopSources();
+  _playFlourish(gen);
+}
+
+void stopWinFlourish() {
+  _flourishGen++;
+  _stopSources();
+}
+
+void _stopSources() {
+  for (final source in _flourishSources) {
+    try {
+      source.callMethod("stop".toJS);
+    } catch (_) {
+      // Already stopped.
+    }
+  }
+  _flourishSources.clear();
+}
+
+Future<void> _playFlourish(int gen) async {
+  try {
+    final swoosh = await rootBundle.load("assets/sounds/swoosh.wav");
+    final fanfare = await rootBundle.load("assets/sounds/fanfare.wav");
+    if (gen != _flourishGen) return;
+    await _playBuffer(swoosh, 0, gen);
+    await _playBuffer(fanfare, 0.08, gen);
+  } catch (_) {
+    // A missing file or a blocked device must not stop the celebration.
+  }
+}
+
+Future<void> _playBuffer(ByteData data, double delay, int gen) async {
+  final ctx = _ctx;
+  if (ctx == null || gen != _flourishGen) return;
+  final bytes = Uint8List.fromList(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
+  final arrayBuffer = bytes.toJS.getProperty("buffer".toJS);
+  final decoded = ctx.callMethod("decodeAudioData".toJS, arrayBuffer);
+  if (decoded == null || !decoded.isA<JSPromise>()) return;
+  final buffer = await (decoded as JSPromise).toDart;
+  if (gen != _flourishGen || buffer == null || !buffer.isA<JSObject>()) return;
+  final source = ctx.callMethod("createBufferSource".toJS) as JSObject;
+  source.setProperty("buffer".toJS, buffer);
+  final destination = ctx.getProperty("destination".toJS) as JSObject;
+  source.callMethod("connect".toJS, destination);
+  final now = (ctx.getProperty("currentTime".toJS) as JSNumber).toDartDouble;
+  source.callMethod("start".toJS, (now + delay).toJS);
+  _flourishSources.add(source);
 }
 
 void playHandOver(bool roundOver) {

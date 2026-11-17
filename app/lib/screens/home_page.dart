@@ -186,7 +186,7 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 8),
             const Text(
-              "Card faces are drawn in the app and dedicated to the public domain (CC0 1.0). See CARD_ART_LICENSE.md.",
+              "Jack, queen, and king are drawn in the app and dedicated to the public domain (CC0 1.0). Ace to 10 show the rank and a single suit. See CARD_ART_LICENSE.md.",
               style: TextStyle(color: Colors.white70, height: 1.4),
             ),
           ],

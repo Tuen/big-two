@@ -1,11 +1,20 @@
-# Card art licence
+# Card art and flourish sounds
 
-The faces of the playing cards in this app are original drawings. They are painted in code in `app/lib/widgets/card_art.dart` and `app/lib/widgets/playing_card_view.dart`. There is no third-party picture, font file, or icon set.
+## Court cards
 
-Number cards from ace to 10 use a drawn suit pip for each spot, in the usual arrangement (the 7 of hearts has seven hearts). Jack, queen, and king are simple figures drawn for this app: a feathered cap, a crown, and a crowned beard. Corner indices are the rank plus a drawn suit, top-left and rotated at the bottom-right.
+Jack, queen, and king are original drawings painted in code in `app/lib/widgets/card_art.dart`: a feathered cap, a single-point crown, and a crowned beard. There is no third-party picture, font file, or icon set.
 
-These drawings are dedicated to the public domain under the CC0 1.0 Universal licence. You can copy, change, and use them, including commercially, with no attribution required. Attribution is still welcome: Big Two card faces, public domain (CC0).
+These drawings are dedicated to the public domain under the CC0 1.0 Universal licence. You can copy, change, and use them, including commercially, with no attribution required. Attribution is still welcome: Big Two court cards, public domain (CC0).
 
-Card backs are the plain blue pattern already in the app and are covered by the same dedication.
+Ace to 10 are not drawings. They use the app's original face: the rank, one suit character, and the same rank again.
+
+Card backs are the plain blue pattern already in the app.
+
+## Flourish sounds
+
+The win celebration plays two sounds, and only while Sounds is on.
+
+- `app/assets/sounds/swoosh.wav` is an original noise sweep made for this app. It is dedicated to the public domain under CC0 1.0.
+- `app/assets/sounds/fanfare.wav` is Kenney's `jingles_NES00.ogg` from the Short Music Jingles pack (Kenney Vleugels, www.kenney.nl), converted from Ogg Vorbis to a mono WAV. The pack is CC0 1.0. Credit is not required. Source: https://opengameart.org/content/85-short-music-jingles and https://kenney.nl/assets/music-jingles
 
 https://creativecommons.org/publicdomain/zero/1.0/
