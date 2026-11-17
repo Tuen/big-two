@@ -184,6 +184,11 @@ class _HomePageState extends State<HomePage> {
               "A single 2♠ is always passed for the other players. Autoplay is off unless it is turned on before the deal. With Autoplay on, a player who faces the current play is also passed when they hold fewer cards than the play needs, or the play is the best of its kind under the table's rules. A play is not passed just because the cards that could beat it have already been played. The skip uses the card count and the rules, not a hidden hand.",
               style: TextStyle(color: Colors.white70, height: 1.4),
             ),
+            const SizedBox(height: 8),
+            const Text(
+              "Card faces are drawn in the app and dedicated to the public domain (CC0 1.0). See CARD_ART_LICENSE.md.",
+              style: TextStyle(color: Colors.white70, height: 1.4),
+            ),
           ],
         ),
       ),

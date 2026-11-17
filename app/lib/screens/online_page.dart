@@ -17,6 +17,7 @@ import "package:big_two/widgets/leave_guard.dart";
 import "package:big_two/widgets/score_sheet.dart";
 import "package:big_two/widgets/table_chat.dart";
 import "package:big_two/widgets/table_view.dart";
+import "package:big_two/widgets/win_flourish.dart";
 import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
@@ -96,6 +97,11 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
   String? _historyTable;
   int? _historyRound;
   int? _historyHand;
+  int _leftoverToken = 0;
+  String? _leftoverFor;
+  List<List<PlayingCard>>? _leftovers;
+  bool _leftoversHidden = false;
+  String? _flourishDone;
 
   @override
   void initState() {
@@ -306,6 +312,7 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
     final cardsChanged = previous == null || previous.yourCards.join(",") != next.yourCards.join(",");
     _view = next;
     _error = null;
+    if (next.status == "complete") _requestLeftovers(next);
     if (newHand || cardsChanged) {
       _order = sortCards(parseCards(next.yourCards), "rank").map(formatCard).toList();
     } else {
@@ -334,6 +341,25 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
   }
 
   int _unread(TableSnapshot view) => unreadChat([for (final line in view.chat) line.id], _chatSeen);
+
+  void _requestLeftovers(TableSnapshot view) {
+    final key = "${view.tableId}:${view.round}:${view.hand}";
+    if (_leftoverFor == key) return;
+    _leftoverFor = key;
+    _leftovers = null;
+    _leftoversHidden = view.watching;
+    if (view.watching) return;
+    final token = ++_leftoverToken;
+    widget.api
+        .finishedHands(tableId: view.tableId, round: view.round, hand: view.hand, settings: view.settings)
+        .then((hands) {
+      if (!mounted || token != _leftoverToken) return;
+      setState(() {
+        _leftovers = hands;
+        _leftoversHidden = hands == null;
+      });
+    });
+  }
 
   String? _audience(TableSnapshot view) {
     return audienceLabel(names: view.watchers, count: view.viewerCount);
@@ -1205,10 +1231,24 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
   Widget _summary(TableSnapshot view) {
     final result = view.result;
     final names = [for (final seat in view.seats) seat.name == null ? "Empty" : _seatTitle(seat)];
+    final handKey = "${view.tableId}:${view.round}:${view.hand}";
+    final celebrate = result?.winner != null && _flourishDone != handKey;
     final winner = result?.winner == null ? "Nobody went out" : "${names[result!.winner!]} wins the hand";
     final matches = view.deckReveal == null || view.commitment == null
         ? null
         : commitDeck(parseCards(view.deckReveal!.split(","))).commitment == view.commitment;
+    final action = view.canNewRound
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text("The next screen sets the seating. The host can shuffle or move players, then someone deals."),
+              const SizedBox(height: 12),
+              FilledButton(onPressed: () => _send("table", {"action": "new_round", "tableId": view.tableId}), child: const Text("New round")),
+            ],
+          )
+        : view.canDeal
+            ? FilledButton(onPressed: () => _send("deal", {"tableId": view.tableId}), child: const Text("Deal next hand"))
+            : null;
     return Scaffold(
       appBar: AppBar(title: Text(view.roundOver ? "Round over" : "Hand over"), actions: [
         if (_audience(view) != null)
@@ -1222,35 +1262,53 @@ class _OnlinePageState extends State<OnlinePage> with WidgetsBindingObserver {
         _chatAction(view),
         TextButton(onPressed: () => _scores(view), child: const Text("Scores")),
       ]),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
+      body: Column(
         children: [
-          WinnerPulse(text: winner),
-          if (view.message.endsWith("plays their last card")) ...[
-            const SizedBox(height: 8),
-            Text(view.message, textAlign: TextAlign.center, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-          ],
-          const SizedBox(height: 12),
-          if (result != null)
-            for (var seat = 0; seat < 4; seat++)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  "${names[seat]}: ${result.cardsLeft[seat]} cards, ${result.handPoints[seat]} this hand, total ${result.runningTotals[seat]}",
-                  style: TextStyle(fontSize: 18, color: result.runningTotals[seat] >= 50 ? gold : Colors.white),
-                ),
-              ),
-          if (matches != null)
-            Text(matches ? "The revealed deal matches the commitment." : "The revealed deal does not match.", style: const TextStyle(fontSize: 16)),
-          if (_scoreLine(view) != null) Text(_scoreLine(view)!, style: const TextStyle(fontSize: 18)),
-          if (_error != null) Text(_error!, style: const TextStyle(color: gold)),
-          const SizedBox(height: 16),
-          if (view.canNewRound) ...[
-            const Text("The next screen sets the seating. The host can shuffle or move players, then someone deals."),
-            const SizedBox(height: 12),
-            FilledButton(onPressed: () => _send("table", {"action": "new_round", "tableId": view.tableId}), child: const Text("New round")),
-          ] else if (view.canDeal)
-            FilledButton(onPressed: () => _send("deal", {"tableId": view.tableId}), child: const Text("Deal next hand")),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                if (celebrate)
+                  WinFlourish(
+                    name: names[result!.winner!],
+                    cards: (view.trick?.cards ?? const <String>[]).map(parseCard).toList(),
+                    onDone: () {
+                      if (mounted) setState(() => _flourishDone = handKey);
+                    },
+                  )
+                else
+                  WinnerPulse(text: winner),
+                if (view.message.endsWith("plays their last card")) ...[
+                  const SizedBox(height: 8),
+                  Text(view.message, textAlign: TextAlign.center, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+                ],
+                const SizedBox(height: 12),
+                if (result != null)
+                  for (var seat = 0; seat < 4; seat++) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        "${names[seat]}: ${result.cardsLeft[seat]} cards, ${result.handPoints[seat]} this hand, total ${result.runningTotals[seat]}",
+                        style: TextStyle(fontSize: 18, color: result.runningTotals[seat] >= 50 ? gold : Colors.white),
+                      ),
+                    ),
+                    if (!celebrate && _leftovers != null) LeftoverCards(cards: _leftovers![seat]),
+                  ],
+                if (!celebrate && _leftovers == null && _leftoversHidden)
+                  Text(
+                    view.watching
+                        ? "You are watching, so the other players' leftover cards stay hidden."
+                        : "The leftover cards could not be read from the saved hand.",
+                    style: const TextStyle(fontSize: 16, color: Colors.white70),
+                  ),
+                if (matches != null)
+                  Text(matches ? "The revealed deal matches the commitment." : "The revealed deal does not match.", style: const TextStyle(fontSize: 16)),
+                if (_scoreLine(view) != null) Text(_scoreLine(view)!, style: const TextStyle(fontSize: 18)),
+                if (_error != null) Text(_error!, style: const TextStyle(color: gold)),
+              ],
+            ),
+          ),
+          if (action != null) Padding(padding: const EdgeInsets.fromLTRB(20, 8, 20, 20), child: action),
         ],
       ),
     );

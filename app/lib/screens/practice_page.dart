@@ -12,6 +12,7 @@ import "package:big_two/theme.dart";
 import "package:big_two/widgets/leave_guard.dart";
 import "package:big_two/widgets/score_sheet.dart";
 import "package:big_two/widgets/table_view.dart";
+import "package:big_two/widgets/win_flourish.dart";
 import "package:flutter/material.dart" hide Step;
 import "package:flutter/services.dart";
 import "package:shared_preferences/shared_preferences.dart";
@@ -68,6 +69,7 @@ class _PracticePageState extends State<PracticePage> {
   int _lastCardGen = 0;
   Timer? _autoplay;
   int _autoplayGen = 0;
+  int? _flourishHand;
 
   @override
   void initState() {
@@ -914,51 +916,72 @@ class _PracticePageState extends State<PracticePage> {
 
   Widget _summary(HandState state) {
     final result = _result!;
+    final celebrate = result.winner != null && _flourishHand != _hands.length;
     final winner = result.winner == null ? "Nobody went out" : "${_names[result.winner!]} wins the hand";
     return Scaffold(
       appBar: AppBar(title: Text(result.roundOver ? "Round over" : "Hand over"), actions: [
         TextButton(onPressed: _scores, child: const Text("Scores")),
       ]),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
+      body: Column(
         children: [
-          WinnerPulse(text: winner),
-          const SizedBox(height: 8),
-          Text(_banner, style: const TextStyle(fontSize: 18)),
-          const SizedBox(height: 16),
-          for (var seat = 0; seat < 4; seat++)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                "${_names[seat]}: ${result.cardsLeft[seat]} cards, ${result.handPoints[seat]} this hand, total ${result.runningTotals[seat]}",
-                style: TextStyle(fontSize: 18, color: result.runningTotals[seat] >= 50 ? gold : Colors.white),
-              ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                if (celebrate)
+                  WinFlourish(
+                    name: _names[result.winner!],
+                    cards: state.trickCards.map(parseCard).toList(),
+                    onDone: () {
+                      if (mounted) setState(() => _flourishHand = _hands.length);
+                    },
+                  )
+                else
+                  WinnerPulse(text: winner),
+                const SizedBox(height: 8),
+                Text(_banner, style: const TextStyle(fontSize: 18)),
+                const SizedBox(height: 16),
+                for (var seat = 0; seat < 4; seat++) ...[
+                  Text(
+                    "${_names[seat]}: ${result.cardsLeft[seat]} cards, ${result.handPoints[seat]} this hand, total ${result.runningTotals[seat]}",
+                    style: TextStyle(fontSize: 18, color: result.runningTotals[seat] >= 50 ? gold : Colors.white),
+                  ),
+                  if (!celebrate) LeftoverCards(cards: state.hands[seat]),
+                ],
+                if (_deck != null && _commitment != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    commitDeck(parseCards(_deck!.split(","))).commitment == _commitment
+                        ? "The revealed deal matches the commitment made at the start."
+                        : "The revealed deal does not match.",
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                ],
+              ],
             ),
-          if (_deck != null && _commitment != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              commitDeck(parseCards(_deck!.split(","))).commitment == _commitment
-                  ? "The revealed deal matches the commitment made at the start."
-                  : "The revealed deal does not match.",
-              style: const TextStyle(fontSize: 16),
-            ),
-          ],
-          const SizedBox(height: 20),
-          if (result.roundOver) ...[
-            const Text("You can change the player order before the next round is dealt."),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () => setState(() {
-                _state = null;
-                _result = null;
-                _startingRound = true;
-                _cover = false;
-                _selected.clear();
-              }),
-              child: const Text("New round"),
-            ),
-          ] else
-            FilledButton(onPressed: _deal, child: const Text("Deal next hand")),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: result.roundOver
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text("You can change the player order before the next round is dealt."),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: () => setState(() {
+                          _state = null;
+                          _result = null;
+                          _startingRound = true;
+                          _cover = false;
+                          _selected.clear();
+                        }),
+                        child: const Text("New round"),
+                      ),
+                    ],
+                  )
+                : FilledButton(onPressed: _deal, child: const Text("Deal next hand")),
+          ),
         ],
       ),
     );

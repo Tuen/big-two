@@ -149,3 +149,7 @@ Default off.
 **Confirm these defaults.** Season starts at 24. The first round number starts at 1, so a table can begin at round 11 instead. Webhook dates use Australia/Melbourne unless the host picks another zone from the list in the lobby (Sydney, Brisbane, Adelaide, Perth, Auckland, UTC).
 
 The worked example, which the tests check: start the hand at 20, 30, 38, 45. Damien (last seat) plays a straight flush. The other three immediately go to 28, 38, 46. Damien stays on 45. Cards left are 0, 11, 9, 4, so card points are 0, 22, 9, 4. Hand points, card points plus bonuses received, are 8, 30, 17, 4. Totals become 28, 60, 55, 49, and the round ends.
+
+## Card faces
+
+The card faces are original drawings painted in the app. Number cards use one pip per spot, in the usual layout. Jack, queen, and king are simple figures. The drawings are CC0 1.0 (public domain). Details are in [CARD_ART_LICENSE.md](CARD_ART_LICENSE.md). Card backs are the plain blue pattern.

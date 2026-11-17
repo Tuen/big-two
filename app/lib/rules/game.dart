@@ -515,6 +515,40 @@ List<String>? lowestLegalPlay(HandState state, int seat, Settings settings) {
   return best.map(formatCard).toList();
 }
 
+class ReplayEvent {
+  final String kind;
+  final int seat;
+  final List<String> cards;
+  const ReplayEvent({required this.kind, required this.seat, this.cards = const []});
+}
+
+/// Rebuild a hand from the deal and the plays already saved. Timeouts are
+/// replayed by the same rules as the server, because those events store no cards.
+Step replay(
+  List<PlayingCard> deck,
+  List<int> running,
+  bool firstHand,
+  int? previousWinner,
+  List<ReplayEvent> events,
+  Settings settings,
+) {
+  Step step = StepOk(startHand(deck, running, firstHand, previousWinner), null, "Deal");
+  for (final event in events) {
+    if (step is StepBad) return step;
+    final state = (step as StepOk).state;
+    if (state.status == "complete") return StepBad("over", "This hand is over");
+    if (event.seat != state.turn) return StepBad("turn", "Not your turn");
+    if (event.kind == "play") {
+      step = applyPlay(state, event.seat, event.cards, settings);
+    } else if (event.kind == "timeout") {
+      step = applyTimeout(state, settings);
+    } else {
+      step = applyPass(state, event.seat, settings);
+    }
+  }
+  return step;
+}
+
 Step applyTimeout(HandState state, Settings settings) {
   if (mustPlayHighestSingle(state, state.turn, settings)) {
     final highest = highestCard(state.hands[state.turn]);
