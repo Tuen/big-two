@@ -1,5 +1,5 @@
 import "package:big_two/rules/cards.dart";
-import "package:big_two/widgets/card_art.dart";
+import "package:big_two/widgets/card_face.dart";
 import "package:big_two/widgets/playing_card_view.dart";
 import "package:flutter/material.dart";
 import "package:flutter_test/flutter_test.dart";
@@ -7,16 +7,16 @@ import "package:flutter_test/flutter_test.dart";
 void main() {
   test("only jack, queen, and king are court cards", () {
     for (var rank = 3; rank <= 10; rank++) {
-      expect(isCourt(rank), isFalse, reason: "rank $rank");
+      expect(isCourtRank(rank), isFalse, reason: "rank $rank");
     }
-    expect(isCourt(14), isFalse);
-    expect(isCourt(15), isFalse);
-    expect(isCourt(11), isTrue);
-    expect(isCourt(12), isTrue);
-    expect(isCourt(13), isTrue);
+    expect(isCourtRank(14), isFalse);
+    expect(isCourtRank(15), isFalse);
+    expect(isCourtRank(11), isTrue);
+    expect(isCourtRank(12), isTrue);
+    expect(isCourtRank(13), isTrue);
   });
 
-  testWidgets("ace to 10 keep one suit, and a jack uses the same index size", (tester) async {
+  testWidgets("ace to 10 keep one suit, and courts use the Android painter", (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Center(
@@ -31,17 +31,12 @@ void main() {
       ),
     );
     expect(find.text("10"), findsNWidgets(2));
-    expect(find.text("J"), findsNWidgets(2));
-    expect(find.text("♠"), findsNWidgets(3));
-    expect(find.byType(CourtFace), findsOneWidget);
-    final tenRank = tester.widget<Text>(find.text("10").first);
-    final jackRank = tester.widget<Text>(find.text("J").first);
-    expect(jackRank.style!.fontSize, tenRank.style!.fontSize);
-    expect(jackRank.style!.fontWeight, tenRank.style!.fontWeight);
+    expect(find.text("♠"), findsNWidgets(2));
+    expect(find.byWidgetPredicate((widget) => widget is CustomPaint && widget.painter is CardFacePainter), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(MaterialApp(home: Center(child: PlayingCardView(card: parseCard("7H"), width: 96))));
-    expect(find.byType(CourtFace), findsNothing);
+    expect(find.byWidgetPredicate((widget) => widget is CustomPaint && widget.painter is CardFacePainter), findsNothing);
     expect(find.text("7"), findsNWidgets(2));
     expect(find.text("♥"), findsNWidgets(2));
   });
@@ -81,6 +76,6 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(find.text("10"), findsNWidgets(2));
-    expect(find.text("K"), findsNWidgets(2));
+    expect(find.byWidgetPredicate((widget) => widget is CustomPaint && widget.painter is CardFacePainter), findsNWidgets(3));
   });
 }

@@ -152,4 +152,4 @@ The worked example, which the tests check: start the hand at 20, 30, 38, 45. Dam
 
 ## Card faces
 
-Ace to 10 show the rank and a single suit. Jack, queen, and king are original drawings, public domain under CC0 1.0. Details and the flourish sounds are in [CARD_ART_LICENSE.md](CARD_ART_LICENSE.md). Card backs are the plain blue pattern.
+Ace to 10 show one suit in the centre. Jack, queen, and king are original two-way figures, the same drawings as the Android app, public domain under CC0 1.0. Details and the flourish sounds are in [CARD_ART_LICENSE.md](CARD_ART_LICENSE.md). Card backs are the plain blue pattern.

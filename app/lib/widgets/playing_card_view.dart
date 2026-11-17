@@ -1,6 +1,6 @@
 import "package:big_two/rules/cards.dart";
 import "package:big_two/theme.dart";
-import "package:big_two/widgets/card_art.dart";
+import "package:big_two/widgets/card_face.dart";
 import "package:flutter/material.dart";
 
 class PlayingCardView extends StatelessWidget {
@@ -48,7 +48,7 @@ class PlayingCardView extends StatelessWidget {
             border: Border.all(color: selected ? gold : const Color(0xFF2A2A2A), width: selected ? 4 : 1.5),
             boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 6, offset: Offset(0, 3))],
           ),
-          child: face == null ? _back() : (isCourt(face.rank) ? _court(context, face) : _face(context, face)),
+          child: face == null ? _back() : (isCourtRank(face.rank) ? _court(context, face) : _face(context, face)),
         ),
       ),
     );
@@ -109,57 +109,10 @@ class PlayingCardView extends StatelessWidget {
     );
   }
 
-  /// The same index sizes and padding as [_face]. Only the centre is the court drawing.
   Widget _court(BuildContext context, PlayingCard face) {
-    final red = face.suit == Suit.hearts || face.suit == Suit.diamonds;
-    final color = red ? cardRed : ink;
-    final suit = switch (face.suit) {
-      Suit.diamonds => "♦",
-      Suit.clubs => "♣",
-      Suit.hearts => "♥",
-      Suit.spades => "♠",
-    };
-    final rank = rankName(face.rank);
     return MediaQuery(
       data: MediaQuery.of(context).copyWith(textScaler: TextScaler.noScaling),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(5, 3, 5, 3),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final corner = constraints.maxHeight * 0.2;
-            final small = constraints.maxHeight * 0.15;
-            Widget mark(String text, double size, Alignment alignment) {
-              return SizedBox(
-                height: size,
-                width: double.infinity,
-                child: FittedBox(
-                  alignment: alignment,
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    text,
-                    style: TextStyle(color: color, fontSize: size, fontWeight: FontWeight.w800, height: 1),
-                  ),
-                ),
-              );
-            }
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                mark(rank, corner, Alignment.centerLeft),
-                mark(suit, small, Alignment.centerLeft),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: CourtFace(card: face),
-                  ),
-                ),
-                mark(rank, corner, Alignment.centerRight),
-              ],
-            );
-          },
-        ),
-      ),
+      child: CustomPaint(painter: CardFacePainter(face), child: const SizedBox.expand()),
     );
   }
 

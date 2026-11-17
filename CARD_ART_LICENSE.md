@@ -1,14 +1,18 @@
 # Card art and flourish sounds
 
-## Court cards
+## Card faces
 
-Jack, queen, and king are original drawings painted in code in `app/lib/widgets/card_art.dart`: a feathered cap, a single-point crown, and a crowned beard. There is no third-party picture, font file, or icon set.
+The playing-card faces are original drawings. The court cards are painted in `app/lib/widgets/card_face.dart`, the same painter as the Android v14 app.
 
-These drawings are dedicated to the public domain under the CC0 1.0 Universal licence. You can copy, change, and use them, including commercially, with no attribution required. Attribution is still welcome: Big Two court cards, public domain (CC0).
+- Aces and number cards (2–10) show one suit in the centre, in the original red and black: hearts and diamonds red, spades and clubs black.
+- Jacks, queens, and kings are original two-way figures drawn for this game, in those same colours. They are not traced or copied from a commercial deck, and they do not use a third-party font or SVG set.
+- Card backs are the app's own blue face with a gold line.
 
-Ace to 10 are not drawings. They use the app's original face: the rank, one suit character, and the same rank again.
+Copyright 2026 TuenProductions.
 
-Card backs are the plain blue pattern already in the app.
+The card-face artwork and the Dart that draws it are released under the Creative Commons Zero 1.0 Universal licence (CC0 1.0). See https://creativecommons.org/publicdomain/zero/1.0/.
+
+You can copy, change, and use this card art commercially. Attribution is not required.
 
 ## Flourish sounds
 

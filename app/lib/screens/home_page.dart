@@ -186,7 +186,7 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 8),
             const Text(
-              "Jack, queen, and king are drawn in the app and dedicated to the public domain (CC0 1.0). Ace to 10 show the rank and a single suit. See CARD_ART_LICENSE.md.",
+              "Jack, queen, and king are original two-way figures, the same drawings as the Android app, dedicated to the public domain (CC0 1.0). Ace to 10 show one suit in the centre. See CARD_ART_LICENSE.md.",
               style: TextStyle(color: Colors.white70, height: 1.4),
             ),
           ],
