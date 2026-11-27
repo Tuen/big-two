@@ -1,3 +1,5 @@
+import "dart:math" as math;
+
 import "package:big_two/rules/cards.dart";
 import "package:big_two/theme.dart";
 import "package:big_two/widgets/card_face.dart";
@@ -112,7 +114,13 @@ class PlayingCardView extends StatelessWidget {
   Widget _court(BuildContext context, PlayingCard face) {
     return MediaQuery(
       data: MediaQuery.of(context).copyWith(textScaler: TextScaler.noScaling),
-      child: CustomPaint(painter: CardFacePainter(face), child: const SizedBox.expand()),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          CustomPaint(painter: CardFacePainter(face), child: const SizedBox.expand()),
+          _CourtIndex(face),
+        ],
+      ),
     );
   }
 
@@ -123,6 +131,100 @@ class PlayingCardView extends StatelessWidget {
         decoration: BoxDecoration(
           border: Border.all(color: gold, width: 2),
           borderRadius: BorderRadius.circular(6),
+        ),
+      ),
+    );
+  }
+}
+
+/// Corner rank and suit for a court card. Same type, weight, and slot sizes
+/// as the number-card index. A cream patch sits behind the glyphs only, so the
+/// drawn figure does not show through the letter. The opposite corner is this
+/// same block, turned halfway around.
+class _CourtIndex extends StatelessWidget {
+  final PlayingCard face;
+  const _CourtIndex(this.face);
+
+  @override
+  Widget build(BuildContext context) {
+    final red = face.suit == Suit.hearts || face.suit == Suit.diamonds;
+    final color = red ? cardRed : ink;
+    final suit = switch (face.suit) {
+      Suit.diamonds => "♦",
+      Suit.clubs => "♣",
+      Suit.hearts => "♥",
+      Suit.spades => "♠",
+    };
+    final rank = rankName(face.rank);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(5, 3, 5, 3),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final corner = constraints.maxHeight * 0.2;
+          final small = constraints.maxHeight * 0.15;
+          Widget block() => _IndexBlock(
+                rank: rank,
+                suit: suit,
+                color: color,
+                rankSize: corner,
+                suitSize: small,
+              );
+          return Stack(
+            children: [
+              Align(alignment: Alignment.topLeft, child: block()),
+              Align(
+                alignment: Alignment.bottomRight,
+                child: Transform.rotate(angle: math.pi, child: block()),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _IndexBlock extends StatelessWidget {
+  final String rank;
+  final String suit;
+  final Color color;
+  final double rankSize;
+  final double suitSize;
+  const _IndexBlock({
+    required this.rank,
+    required this.suit,
+    required this.color,
+    required this.rankSize,
+    required this.suitSize,
+  });
+
+  Widget _glyph(String text, double size) {
+    return SizedBox(
+      height: size,
+      child: FittedBox(
+        alignment: Alignment.centerLeft,
+        fit: BoxFit.scaleDown,
+        child: Text(
+          text,
+          style: TextStyle(color: color, fontSize: size, fontWeight: FontWeight.w800, height: 1),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(color: cardFace, borderRadius: BorderRadius.circular(2)),
+      child: Padding(
+        padding: const EdgeInsets.all(1),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _glyph(rank, rankSize),
+            _glyph(suit, suitSize),
+          ],
         ),
       ),
     );
