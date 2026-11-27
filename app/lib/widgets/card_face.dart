@@ -15,8 +15,6 @@ class CardFacePainter extends CustomPainter {
     final color = suitInk(card.suit);
     if (!isCourtRank(card.rank)) return;
     _court(canvas, size, color);
-    _index(canvas, size, color, mirror: false);
-    _index(canvas, size, color, mirror: true);
   }
 
   void _court(Canvas canvas, Size size, Color color) {
@@ -167,53 +165,6 @@ class CardFacePainter extends CustomPainter {
         ..strokeWidth = math.max(1.1, box.width * 0.045)
         ..strokeCap = StrokeCap.round,
     );
-  }
-
-  void _index(Canvas canvas, Size size, Color color, {required bool mirror}) {
-    final rank = rankName(card.rank);
-    // Same sizes as the v13 index: rank is a fifth of the padded height,
-    // and the suit under it is 15%.
-    final innerH = math.max(0.0, size.height - 6);
-    final rankSize = innerH * 0.2;
-    final suitSize = innerH * 0.15;
-    final painter = TextPainter(
-      text: TextSpan(
-        text: rank,
-        style: TextStyle(color: color, fontSize: rankSize, fontWeight: FontWeight.w800, fontFamily: "serif", height: 1),
-      ),
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-    )..layout();
-    final maxWidth = math.max(0.0, size.width - 10);
-    final scale = painter.width > maxWidth && painter.width > 0 ? maxWidth / painter.width : 1.0;
-    final blockW = math.max(painter.width * scale, suitSize);
-    final blockH = painter.height * scale + suitSize;
-    const padX = 5.0;
-    const padY = 3.0;
-    canvas.save();
-    if (mirror) {
-      canvas.translate(size.width, size.height);
-      canvas.rotate(math.pi);
-    }
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(padX * 0.35, padY * 0.2, blockW + padX, blockH + padY),
-        const Radius.circular(2),
-      ),
-      Paint()..color = cardFace,
-    );
-    canvas.save();
-    canvas.translate(padX, padY);
-    canvas.scale(scale);
-    painter.paint(canvas, Offset.zero);
-    canvas.restore();
-    paintSuit(
-      canvas,
-      Rect.fromLTWH(padX, padY + painter.height * scale, suitSize, suitSize),
-      card.suit,
-      color,
-    );
-    canvas.restore();
   }
 
   @override

@@ -31,8 +31,15 @@ void main() {
       ),
     );
     expect(find.text("10"), findsNWidgets(2));
-    expect(find.text("♠"), findsNWidgets(2));
+    expect(find.text("J"), findsNWidgets(2));
+    expect(find.text("♠"), findsNWidgets(4));
     expect(find.byWidgetPredicate((widget) => widget is CustomPaint && widget.painter is CardFacePainter), findsOneWidget);
+    final tenRank = tester.widget<Text>(find.text("10").first);
+    final jackRank = tester.widget<Text>(find.text("J").first);
+    expect(jackRank.style!.fontWeight, tenRank.style!.fontWeight);
+    expect(jackRank.style!.fontFamily, tenRank.style!.fontFamily);
+    expect(jackRank.style!.fontSize, tenRank.style!.fontSize);
+    expect(jackRank.style!.height, tenRank.style!.height);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(MaterialApp(home: Center(child: PlayingCardView(card: parseCard("7H"), width: 96))));
